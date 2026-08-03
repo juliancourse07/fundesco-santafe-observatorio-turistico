@@ -1,0 +1,323 @@
+{
+  "total_registros": 17,
+  "columnas": 127,
+  "fechas": {
+    "2026-07-28": 5,
+    "2026-07-29": 2,
+    "2026-07-30": 4,
+    "2026-07-31": 3,
+    "2026-08-01": 2,
+    "2026-08-02": 1
+  },
+  "upz_top": [
+    [
+      "Las Cruces",
+      6
+    ],
+    [
+      "Lourdes",
+      4
+    ],
+    [
+      "La Macarena",
+      4
+    ],
+    [
+      "Las Nieves",
+      3
+    ]
+  ],
+  "barrios_top": [
+    [
+      "Las Cruces",
+      5
+    ],
+    [
+      "Veracruz",
+      3
+    ],
+    [
+      "Los Laches",
+      2
+    ],
+    [
+      "Otro",
+      2
+    ],
+    [
+      "La Macarena",
+      2
+    ],
+    [
+      "La Peña",
+      1
+    ],
+    [
+      "El Rocío",
+      1
+    ],
+    [
+      "El Consuelo",
+      1
+    ]
+  ],
+  "tipos_top": [
+    [
+      "Gastronomía",
+      9
+    ],
+    [
+      "Experiencia cultural y/o artística",
+      2
+    ],
+    [
+      "Otro",
+      2
+    ],
+    [
+      "Artesanías",
+      1
+    ],
+    [
+      "Entretenimiento / actividades recreativas",
+      1
+    ],
+    [
+      "Producto turístico integrado",
+      1
+    ],
+    [
+      "Alojamiento / hospedaje",
+      1
+    ]
+  ],
+  "estado": [
+    [
+      "Completo y verificado",
+      13
+    ],
+    [
+      "Completo, pendiente validar soportes",
+      4
+    ]
+  ],
+  "calidad_geografica": [
+    [
+      "Punto exacto del establecimiento",
+      14
+    ],
+    [
+      "Solo dirección, sin punto confirmado",
+      2
+    ],
+    [
+      "Punto aproximado en la misma cuadra",
+      1
+    ]
+  ],
+  "quiere_rutas": [
+    [
+      "Sí",
+      17
+    ]
+  ],
+  "necesidades_top": [
+    [
+      "Marketing digital",
+      14
+    ],
+    [
+      "Inglés u otros idiomas",
+      13
+    ],
+    [
+      "Servicio al cliente",
+      12
+    ],
+    [
+      "Seguridad",
+      11
+    ],
+    [
+      "Alianzas comerciales",
+      11
+    ],
+    [
+      "Diseño de producto turístico",
+      10
+    ],
+    [
+      "Fotografía / imagen / marca",
+      10
+    ],
+    [
+      "RNT / normatividad turística",
+      10
+    ],
+    [
+      "Innovación tecnológica",
+      9
+    ],
+    [
+      "Accesibilidad",
+      9
+    ],
+    [
+      "Infraestructura",
+      8
+    ],
+    [
+      "Finanzas",
+      7
+    ],
+    [
+      "Sostenibilidad",
+      7
+    ],
+    [
+      "Formalización",
+      7
+    ],
+    [
+      "Calefacción",
+      1
+    ]
+  ],
+  "herramientas_top": [
+    [
+      "Redes sociales",
+      12
+    ],
+    [
+      "Google Maps / Google Business Profile",
+      12
+    ],
+    [
+      "WhatsApp Business",
+      11
+    ],
+    [
+      "Datáfono / pagos digitales",
+      5
+    ],
+    [
+      "Publicidad digital",
+      4
+    ],
+    [
+      "Excel o base de datos de clientes",
+      3
+    ],
+    [
+      "Reservas en línea",
+      3
+    ],
+    [
+      "Inteligencia artificial",
+      2
+    ],
+    [
+      "Página web",
+      1
+    ],
+    [
+      "Ninguna",
+      1
+    ]
+  ],
+  "sostenibilidad_top": [
+    [
+      "Compra a proveedores locales",
+      15
+    ],
+    [
+      "Separación de residuos",
+      14
+    ],
+    [
+      "Reducción de plásticos",
+      14
+    ],
+    [
+      "Uso eficiente de agua",
+      14
+    ],
+    [
+      "Cuidado del patrimonio",
+      14
+    ],
+    [
+      "Uso eficiente de energía",
+      13
+    ],
+    [
+      "Promoción de cultura local",
+      12
+    ],
+    [
+      "Inclusión laboral",
+      9
+    ],
+    [
+      "Educación ambiental",
+      8
+    ],
+    [
+      "Ninguna",
+      1
+    ]
+  ],
+  "segmentos_top": [
+    [
+      "Visitantes de Bogotá",
+      16
+    ],
+    [
+      "Turistas nacionales",
+      15
+    ],
+    [
+      "Turistas internacionales",
+      15
+    ],
+    [
+      "Habitantes de la localidad",
+      13
+    ],
+    [
+      "Familias",
+      12
+    ],
+    [
+      "Estudiantes",
+      11
+    ],
+    [
+      "Adultos mayores",
+      10
+    ],
+    [
+      "Empresas / grupos corporativos",
+      8
+    ],
+    [
+      "Población vulnerable",
+      6
+    ],
+    [
+      "Instituciones educativas",
+      4
+    ]
+  ],
+  "score_avgs": {
+    "Gobernanza": 2.88,
+    "Tecnología": 3.12,
+    "Innovación": 3.76,
+    "Sostenibilidad ambiental": 4.18,
+    "Accesibilidad": 2.94,
+    "Comercio": 3.94,
+    "Tejido empresarial": 3.06
+  },
+  "fuente_archivo": "CARACTERIZACIÓN ZONAS TURÍSTICAS SANTA FE - DESARROLLO TURÍSTICO SANTAFEREÑO- CPS 500-2025 (respuestas).xlsx",
+  "generado": "2026-08-03 22:42"
+}
