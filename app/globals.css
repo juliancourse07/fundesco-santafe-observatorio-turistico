@@ -1,0 +1,8 @@
+@import 'leaflet/dist/leaflet.css';
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+:root{--forest:#10483D;--green:#178C72;--lime:#B5D334;--gold:#F2B705;--cream:#F7F2E8;--ink:#17231F}
+body{background:linear-gradient(180deg,#F7F2E8 0%,#FFFFFF 42%);color:var(--ink)}
+.card{border:1px solid rgba(16,72,61,.12);background:rgba(255,255,255,.86);box-shadow:0 16px 40px rgba(16,72,61,.08);border-radius:24px}
+.fundesco-gradient{background:radial-gradient(circle at top left,rgba(181,211,52,.35),transparent 25%),linear-gradient(135deg,#10483D,#178C72)}
