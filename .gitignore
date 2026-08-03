@@ -3,6 +3,8 @@ node_modules/
 vendor/
 
 # Build output
+.next/
+out/
 dist/
 build/
 *.min.js
