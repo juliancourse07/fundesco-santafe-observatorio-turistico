@@ -9,14 +9,19 @@ export async function fetchSheetRows() {
   }
 
   if (csvUrl) {
-    const response = await fetch(csvUrl, {
-      cache: 'no-store',
-      headers: {
-        'Cache-Control': 'no-cache',
-        Pragma: 'no-cache',
-      },
-      next: { revalidate: 0 },
-    });
+    let response: Response;
+    try {
+      response = await fetch(csvUrl, {
+        cache: 'no-store',
+        headers: {
+          'Cache-Control': 'no-cache',
+          Pragma: 'no-cache',
+        },
+        next: { revalidate: 0 },
+      });
+    } catch {
+      throw new Error('No fue posible conectar con Google Sheets. Verifica que la hoja esté publicada como CSV y accesible públicamente.');
+    }
 
     if (!response.ok) {
       throw new Error(`No fue posible descargar el CSV de Google Sheets (${response.status}).`);
@@ -36,14 +41,19 @@ export async function fetchSheetRows() {
     return parsed.data;
   }
 
-  const response = await fetch(scriptUrl!, {
-    cache: 'no-store',
-    headers: {
-      'Cache-Control': 'no-cache',
-      Pragma: 'no-cache',
-    },
-    next: { revalidate: 0 },
-  });
+  let response: Response;
+  try {
+    response = await fetch(scriptUrl!, {
+      cache: 'no-store',
+      headers: {
+        'Cache-Control': 'no-cache',
+        Pragma: 'no-cache',
+      },
+      next: { revalidate: 0 },
+    });
+  } catch {
+    throw new Error('No fue posible conectar con Google Apps Script. Verifica que la URL sea pública y esté respondiendo.');
+  }
 
   if (!response.ok) {
     throw new Error(`No fue posible consultar el Apps Script (${response.status}).`);
