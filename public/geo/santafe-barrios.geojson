@@ -1,0 +1,131 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": { "nombre": "Las Cruces", "upz": "Las Cruces" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-74.0850, 4.5870],
+          [-74.0760, 4.5870],
+          [-74.0760, 4.5940],
+          [-74.0850, 4.5940],
+          [-74.0850, 4.5870]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "nombre": "Veracruz", "upz": "Sagrado Corazón" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-74.0760, 4.5990],
+          [-74.0670, 4.5990],
+          [-74.0670, 4.6080],
+          [-74.0760, 4.6080],
+          [-74.0760, 4.5990]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "nombre": "La Macarena", "upz": "La Macarena" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-74.0710, 4.6090],
+          [-74.0620, 4.6090],
+          [-74.0620, 4.6180],
+          [-74.0710, 4.6180],
+          [-74.0710, 4.6090]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "nombre": "Los Laches", "upz": "Lourdes" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-74.0700, 4.5800],
+          [-74.0610, 4.5800],
+          [-74.0610, 4.5880],
+          [-74.0700, 4.5880],
+          [-74.0700, 4.5800]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "nombre": "La Peña", "upz": "Lourdes" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-74.0710, 4.5820],
+          [-74.0640, 4.5820],
+          [-74.0640, 4.5880],
+          [-74.0710, 4.5880],
+          [-74.0710, 4.5820]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "nombre": "El Consuelo", "upz": "Las Cruces" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-74.0760, 4.5790],
+          [-74.0680, 4.5790],
+          [-74.0680, 4.5850],
+          [-74.0760, 4.5850],
+          [-74.0760, 4.5790]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "nombre": "El Rocío", "upz": "Las Cruces" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-74.0790, 4.5760],
+          [-74.0720, 4.5760],
+          [-74.0720, 4.5820],
+          [-74.0790, 4.5820],
+          [-74.0790, 4.5760]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "nombre": "San Diego", "upz": "Sagrado Corazón" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-74.0740, 4.6070],
+          [-74.0650, 4.6070],
+          [-74.0650, 4.6150],
+          [-74.0740, 4.6150],
+          [-74.0740, 4.6070]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "nombre": "Otro", "upz": "Sin clasificar" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-74.0760, 4.5960],
+          [-74.0690, 4.5960],
+          [-74.0690, 4.6020],
+          [-74.0760, 4.6020],
+          [-74.0760, 4.5960]
+        ]]
+      }
+    }
+  ]
+}
