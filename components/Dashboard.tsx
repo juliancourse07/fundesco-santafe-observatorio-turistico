@@ -57,12 +57,12 @@ export default function Dashboard(){
    <Kpi label="Puntos estimados" value={stats.estimados}/>
   </section>
 
-  <section className="max-w-7xl mx-auto px-6 grid lg:grid-cols-3 gap-6">
-   <div className="card p-6 lg:col-span-2">
+  <section className="max-w-7xl mx-auto px-6 grid lg:grid-cols-3 gap-6 items-start">
+   <div className="card p-6 lg:col-span-2" style={{ position: 'relative', zIndex: 0 }}>
     <h2 className="text-2xl font-bold text-fundesco-forest mb-4">Mapa interactivo de avance</h2>
     <MapPanel records={data.records}/>
    </div>
-   <div className="card p-6 overflow-auto max-h-[600px]">
+   <div className="card p-6 overflow-auto" style={{ maxHeight: '620px' }}>
     <h2 className="text-2xl font-bold text-fundesco-forest">Análisis IA</h2>
     <SummaryText text={summary}/>
    </div>
@@ -112,6 +112,42 @@ export default function Dashboard(){
     </ResponsiveContainer>
    </div>
   </section>
+
+  {stats.avanceBarrio && stats.avanceBarrio.length > 0 && (
+  <section className="max-w-7xl mx-auto px-6 py-4 mb-8">
+   <div className="card p-6">
+    <h2 className="text-xl font-bold text-fundesco-forest mb-4">Detalle por barrio</h2>
+    <div className="overflow-x-auto">
+     <table className="w-full text-sm">
+      <thead>
+       <tr className="bg-fundesco-forest text-white">
+        <th className="px-3 py-2 text-left rounded-tl-lg">Barrio</th>
+        <th className="px-3 py-2 text-center">Encuestas</th>
+        <th className="px-3 py-2 text-center">% del total</th>
+        <th className="px-3 py-2 text-center">Score prom.</th>
+        <th className="px-3 py-2 text-center rounded-tr-lg">% con RNT</th>
+       </tr>
+      </thead>
+      <tbody>
+       {stats.avanceBarrio.map((b: any, i: number) => (
+        <tr key={b.nombre} className={i % 2 === 0 ? 'bg-white' : 'bg-slate-50'}>
+         <td className="px-3 py-2 font-medium text-fundesco-forest">{b.nombre}</td>
+         <td className="px-3 py-2 text-center font-bold">{b.cantidad}</td>
+         <td className="px-3 py-2 text-center">{b.pctTotal}%</td>
+         <td className="px-3 py-2 text-center">
+          <span className={`font-bold ${b.scorePromedio >= 3.5 ? 'text-green-700' : b.scorePromedio >= 2.5 ? 'text-yellow-600' : 'text-red-600'}`}>
+           {b.scorePromedio > 0 ? b.scorePromedio.toFixed(1) : '—'}/5
+          </span>
+         </td>
+         <td className="px-3 py-2 text-center">{b.pctRNT !== undefined ? `${b.pctRNT}%` : '—'}</td>
+        </tr>
+       ))}
+      </tbody>
+     </table>
+    </div>
+   </div>
+  </section>
+  )}
  </main>;
 }
 
