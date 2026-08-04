@@ -1,19 +1,44 @@
 'use client';
-import { useEffect, useState } from 'react';
-import { MapContainer, TileLayer, CircleMarker, Popup, GeoJSON, Tooltip, LayersControl } from 'react-leaflet';
-import type { Layer, PathOptions } from 'leaflet';
+import { useEffect, useRef, useState } from 'react';
+import { MapContainer, TileLayer, CircleMarker, Popup, GeoJSON, LayersControl, useMap } from 'react-leaflet';
+import type { Layer, PathOptions, LatLngBoundsExpression } from 'leaflet';
 
 type SurveyRecord = { id: string; nombre: string; barrio: string; upz: string; tipo: string; lat: number; lng: number; geoPrecision: string; scores?: Record<string, number>; };
 type GeoFeature = { type: string; properties: { nombre: string; upz: string }; geometry: object };
 type GeoData = { type: string; features: GeoFeature[] };
 
-function choroplethColor(count: number, max: number): string {
-  if (max === 0 || count === 0) return '#d1fae5';
-  const t = count / max;
-  if (t < 0.25) return '#a7f3d0';
-  if (t < 0.5) return '#6ee7b7';
-  if (t < 0.75) return '#178C72';
-  return '#0f5c4b';
+// Santa Fe bounding box
+const SANTA_FE_BOUNDS: LatLngBoundsExpression = [[4.570, -74.095], [4.622, -74.055]];
+
+// 6-step choropleth scale from light to dark green
+const CHOROPLETH_STEPS = [
+  { color: '#f0fdf4', label: '0' },
+  { color: '#bbf7d0', label: '1–2' },
+  { color: '#4ade80', label: '3–5' },
+  { color: '#16a34a', label: '6–9' },
+  { color: '#166534', label: '10–14' },
+  { color: '#052e16', label: '15+' },
+];
+
+function choroplethColor(count: number): string {
+  if (count === 0) return CHOROPLETH_STEPS[0].color;
+  if (count <= 2) return CHOROPLETH_STEPS[1].color;
+  if (count <= 5) return CHOROPLETH_STEPS[2].color;
+  if (count <= 9) return CHOROPLETH_STEPS[3].color;
+  if (count <= 14) return CHOROPLETH_STEPS[4].color;
+  return CHOROPLETH_STEPS[5].color;
+}
+
+function FitBounds({ geoData }: { geoData: GeoData | null }) {
+  const map = useMap();
+  const fitted = useRef(false);
+  useEffect(() => {
+    if (geoData && !fitted.current) {
+      map.fitBounds(SANTA_FE_BOUNDS, { padding: [10, 10] });
+      fitted.current = true;
+    }
+  }, [geoData, map]);
+  return null;
 }
 
 export default function MapPanel({ records }: { records: SurveyRecord[] }) {
@@ -35,19 +60,20 @@ export default function MapPanel({ records }: { records: SurveyRecord[] }) {
     if (!barrioScores[b]) barrioScores[b] = [];
     if (avg > 0) barrioScores[b].push(avg);
   }
-  const maxCount = Math.max(...Object.values(barrioCount), 1);
-
-  const legendItems = [
-    { color: '#d1fae5', label: '0' },
-    { color: '#a7f3d0', label: '1-25%' },
-    { color: '#6ee7b7', label: '26-50%' },
-    { color: '#178C72', label: '51-75%' },
-    { color: '#0f5c4b', label: '76-100%' },
-  ];
 
   return (
-    <div className="relative">
-      <MapContainer center={[4.596, -74.073]} zoom={13} scrollWheelZoom className="h-[520px] w-full rounded-3xl">
+    <div style={{ position: 'relative', height: '520px', width: '100%', borderRadius: '1.5rem', overflow: 'hidden' }}>
+      <MapContainer
+        center={[4.596, -74.075]}
+        zoom={14}
+        minZoom={13}
+        maxZoom={17}
+        maxBounds={SANTA_FE_BOUNDS}
+        maxBoundsViscosity={1.0}
+        scrollWheelZoom
+        style={{ height: '100%', width: '100%' }}
+      >
+        <FitBounds geoData={geoData} />
         <LayersControl position="topright">
           <LayersControl.BaseLayer checked name="OpenStreetMap">
             <TileLayer attribution='&copy; OpenStreetMap' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
@@ -62,10 +88,10 @@ export default function MapPanel({ records }: { records: SurveyRecord[] }) {
                   const nombre = feature?.properties?.nombre as string;
                   const count = barrioCount[nombre] || 0;
                   return {
-                    fillColor: choroplethColor(count, maxCount),
-                    fillOpacity: 0.7,
-                    color: '#178C72',
-                    weight: 2,
+                    fillColor: choroplethColor(count),
+                    fillOpacity: 0.75,
+                    color: '#052e16',
+                    weight: 2.5,
                   } as PathOptions;
                 }}
                 onEachFeature={(feature: any, layer: Layer) => {
@@ -75,16 +101,15 @@ export default function MapPanel({ records }: { records: SurveyRecord[] }) {
                   const topTipos = Object.entries(barrioTipos[nombre] || {}).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([t]) => t).join(', ') || 'N/A';
                   const scores = barrioScores[nombre] || [];
                   const avgScore = scores.length ? (scores.reduce((a, v) => a + v, 0) / scores.length).toFixed(1) : 'N/A';
-                  (layer as any).bindTooltip(`<b>${nombre}</b><br/>${count} encuestas`, {
-                    permanent: true,
-                    direction: 'center',
-                    className: 'choropleth-label',
-                  });
+                  (layer as any).bindTooltip(
+                    `<div style="text-align:center;line-height:1.3"><b style="font-size:12px">${nombre}</b><br/><span style="font-size:13px;font-weight:700;color:#052e16">${count}</span></div>`,
+                    { permanent: true, direction: 'center', className: 'choropleth-label' }
+                  );
                   (layer as any).bindPopup(
-                    `<div style="min-width:180px"><b>${nombre}</b><br/><span style="color:#555">UPZ: ${upz}</span><hr style="margin:4px 0"/>` +
+                    `<div style="min-width:190px"><b>${nombre}</b><br/><span style="color:#555;font-size:11px">UPZ: ${upz}</span><hr style="margin:5px 0"/>` +
                     `<b>Encuestas:</b> ${count}<br/>` +
-                    `<b>Tipos:</b> ${topTipos}<br/>` +
-                    `<b>Score promedio:</b> ${avgScore}</div>`
+                    `<b>Tipos principales:</b> ${topTipos}<br/>` +
+                    `<b>Score promedio:</b> ${avgScore}/5</div>`
                   );
                 }}
               />
@@ -97,14 +122,14 @@ export default function MapPanel({ records }: { records: SurveyRecord[] }) {
                 <CircleMarker
                   key={r.id}
                   center={[r.lat, r.lng]}
-                  radius={r.geoPrecision === 'exacto' ? 8 : 6}
-                  pathOptions={{ color: r.geoPrecision === 'exacto' ? '#178C72' : '#F2B705', fillOpacity: 0.75 }}
+                  radius={r.geoPrecision === 'exacto' ? 7 : 5}
+                  pathOptions={{ color: r.geoPrecision === 'exacto' ? '#166534' : '#ca8a04', fillColor: r.geoPrecision === 'exacto' ? '#4ade80' : '#fde047', fillOpacity: 0.85, weight: 1.5 }}
                 >
                   <Popup>
                     <b>{r.nombre || 'Emprendimiento'}</b><br />
-                    {r.barrio} - {r.upz}<br />
+                    {r.barrio} — {r.upz}<br />
                     {r.tipo}<br />
-                    Geo: {r.geoPrecision}
+                    <span style={{ color: '#666', fontSize: '11px' }}>Geo: {r.geoPrecision}</span>
                   </Popup>
                 </CircleMarker>
               ))}
@@ -113,21 +138,21 @@ export default function MapPanel({ records }: { records: SurveyRecord[] }) {
         </LayersControl>
       </MapContainer>
 
-      {/* Leyenda */}
-      <div className="absolute bottom-4 left-4 z-[1000] bg-white rounded-xl shadow-lg px-3 py-2 text-xs space-y-1">
-        <p className="font-bold text-fundesco-forest mb-1">Encuestas por zona</p>
-        {legendItems.map(item => (
-          <div key={item.label} className="flex items-center gap-2">
-            <div className="w-4 h-4 rounded border border-fundesco-forest/40" style={{ background: item.color }} />
+      {/* Leyenda — dentro del contenedor con position relative, z-index alto */}
+      <div style={{ position: 'absolute', bottom: '16px', left: '16px', zIndex: 1000, background: 'white', borderRadius: '12px', boxShadow: '0 2px 8px rgba(0,0,0,0.18)', padding: '10px 12px', fontSize: '11px', minWidth: '130px', pointerEvents: 'none' }}>
+        <p style={{ fontWeight: 700, color: '#052e16', marginBottom: '6px', fontSize: '11px' }}>Encuestas por zona</p>
+        {CHOROPLETH_STEPS.map(item => (
+          <div key={item.label} style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '3px' }}>
+            <div style={{ width: '14px', height: '14px', borderRadius: '3px', border: '1px solid #16653455', background: item.color, flexShrink: 0 }} />
             <span>{item.label}</span>
           </div>
         ))}
-        <hr className="my-1" />
-        <div className="flex items-center gap-2"><div className="w-4 h-4 rounded-full border-2 border-fundesco-forest bg-fundesco-forest/40" /><span>Exacto</span></div>
-        <div className="flex items-center gap-2"><div className="w-4 h-4 rounded-full border-2 border-yellow-500 bg-yellow-400/40" /><span>Estimado</span></div>
+        <hr style={{ margin: '5px 0', borderColor: '#e2e8f0' }} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '3px' }}><div style={{ width: '12px', height: '12px', borderRadius: '50%', border: '2px solid #166534', background: '#4ade8066', flexShrink: 0 }} /><span>Exacto</span></div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><div style={{ width: '12px', height: '12px', borderRadius: '50%', border: '2px solid #ca8a04', background: '#fde04766', flexShrink: 0 }} /><span>Estimado</span></div>
       </div>
 
-      <style>{`.choropleth-label { background:rgba(255,255,255,0.85); border:none; box-shadow:none; font-size:11px; font-weight:600; color:#0f5c4b; text-align:center; }`}</style>
+      <style>{`.choropleth-label { background: rgba(255,255,255,0.88) !important; border: none !important; box-shadow: 0 1px 4px rgba(0,0,0,0.15) !important; font-size: 11px !important; font-weight: 600 !important; color: #052e16 !important; text-align: center !important; padding: 3px 6px !important; border-radius: 6px !important; }`}</style>
     </div>
   );
 }

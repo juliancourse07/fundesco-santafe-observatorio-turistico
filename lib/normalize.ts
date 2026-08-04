@@ -7,12 +7,20 @@ export type SurveyRecord = {
   quiereRuta: boolean; necesidades: string[]; herramientas: string[]; scores: Record<string, number>;
   // formalización
   tieneRegistroMercantil: boolean; tieneRNT: boolean; tieneRUT: boolean; facturacionElectronica: boolean;
+  tieneAfiliacionSS: boolean; tieneSeguro: boolean;
+  conocimientoNormatividad: string; certificaciones: string[];
   // infraestructura
   tieneSedeFisica: boolean; tieneSeñalizacion: boolean; tieneBanos: boolean; tieneBotiquin: boolean;
   conectividad: string;
   // empleo
   empleadosFormales: number; empleadosInformales: number; mujeres: number; jovenes: number;
   mayores60: number; diversidad: number;
+  // perfil representante
+  generoRepresentante: string; nivelEducativo: string; enfoqueAlta: string; edadRepresentante: number;
+  // producto turístico y mercado
+  segmentosMercado: string[]; publicoObjetivo: string;
+  capacidadDiaria: number; capacidadVisitantes: number;
+  idiomas: string[];
   // capacitación y sostenibilidad
   capacitacionPrevia: boolean; practicasSostenibilidad: string[]; necesidadesCapacitacion: string[];
   // preparación turística
@@ -21,6 +29,8 @@ export type SurveyRecord = {
   oportunidades: string; riesgos: string;
   // canales digitales
   canalesDigitales: string[];
+  // articulación
+  atractivosCercanos: string; propuestaArticulacion: string;
 };
 
 const clean = (v: any) => String(v ?? '').trim();
@@ -64,6 +74,10 @@ export function normaliseRecord(r: RawRecord, idx: number): SurveyRecord {
     tieneRNT: yesNo(r['¿Cuenta con Registro Nacional de Turismo - RNT?']),
     tieneRUT: yesNo(r['¿Cuenta con RUT?']),
     facturacionElectronica: yesNo(r['¿Usa facturación electrónica o documento equivalente?']),
+    tieneAfiliacionSS: yesNo(r['¿Tiene afiliación a seguridad social?']),
+    tieneSeguro: yesNo(r['¿Cuenta con seguro para actividades o responsabilidad civil?']),
+    conocimientoNormatividad: clean(r['Conocimiento de normatividad turística']),
+    certificaciones: split(r['Certificaciones de calidad turística, sostenibilidad, sellos o reconocimientos']),
     tieneSedeFisica: yesNo(r['¿Cuenta con sede física?']),
     tieneSeñalizacion: yesNo(r['¿Cuenta con señalización visible?']),
     tieneBanos: yesNo(r['¿Cuenta con baños disponibles para usuarios?']),
@@ -75,6 +89,15 @@ export function normaliseRecord(r: RawRecord, idx: number): SurveyRecord {
     jovenes: numOrZero(r['Número de jóvenes vinculados']),
     mayores60: numOrZero(r['Número de personas mayores de 60 años vinculadas']),
     diversidad: numOrZero(r['Número de personas de población diversa o enfoque diferencial vinculadas']),
+    generoRepresentante: clean(r['Género del representante']),
+    nivelEducativo: clean(r['Nivel educativo del representante']),
+    enfoqueAlta: clean(r['Enfoque diferencial del representante']),
+    edadRepresentante: numOrZero(r['Edad del representante']),
+    segmentosMercado: split(r['Segmentos de mercado atendidos']),
+    publicoObjetivo: clean(r['Público objetivo principal']),
+    capacidadDiaria: numOrZero(r['Capacidad máxima de atención diaria']),
+    capacidadVisitantes: numOrZero(r['Capacidad máxima de visitantes al mismo tiempo']),
+    idiomas: split(r['Idiomas disponibles para atención']),
     capacitacionPrevia: yesNo(r['Ha recibido capacitaciones relacionadas con turismo, servicio, sostenibilidad, marketing, finanzas o tecnología']),
     practicasSostenibilidad: split(r['Prácticas de sostenibilidad implementadas']),
     necesidadesCapacitacion: split(r['Necesidades de capacitación del equipo']),
@@ -84,6 +107,8 @@ export function normaliseRecord(r: RawRecord, idx: number): SurveyRecord {
     oportunidades: clean(r['Oportunidades de crecimiento identificadas']).slice(0, 200),
     riesgos: clean(r['Riesgos o amenazas para el desarrollo turístico']).slice(0, 200),
     canalesDigitales: split(r['Canales digitales activos']),
+    atractivosCercanos: clean(r['Atractivos cercanos relacionados']).slice(0, 150),
+    propuestaArticulacion: clean(r['Propuesta de articulación con rutas turísticas']).slice(0, 150),
   };
 }
 
@@ -111,6 +136,8 @@ export function buildStats(records: SurveyRecord[]) {
     pctRNT: pct(records.filter(r => r.tieneRNT).length),
     pctRUT: pct(records.filter(r => r.tieneRUT).length),
     pctFacturacionElectronica: pct(records.filter(r => r.facturacionElectronica).length),
+    pctAfiliacionSS: pct(records.filter(r => r.tieneAfiliacionSS).length),
+    pctSeguro: pct(records.filter(r => r.tieneSeguro).length),
   };
 
   // infraestructura
@@ -132,6 +159,36 @@ export function buildStats(records: SurveyRecord[]) {
     totalDiversidad: records.reduce((a, r) => a + r.diversidad, 0),
   };
 
+  // perfil de emprendedores
+  const generoCount = count(records.map(r => r.generoRepresentante).filter(Boolean));
+  const educacionCount = count(records.map(r => r.nivelEducativo).filter(Boolean));
+  const enfoqueCount = count(records.map(r => r.enfoqueAlta).filter(Boolean));
+  const edades = records.map(r => r.edadRepresentante).filter(v => v > 0);
+  const perfilEmprendedores = {
+    topGenero: top(generoCount, 5),
+    topEducacion: top(educacionCount, 6),
+    topEnfoque: top(enfoqueCount, 5),
+    promedioEdad: avg(edades),
+  };
+
+  // producto turístico y mercado
+  const segmentosCount = count(records.flatMap(r => r.segmentosMercado));
+  const idiomasCount = count(records.flatMap(r => r.idiomas));
+  const publicoCount = count(records.map(r => r.publicoObjetivo).filter(Boolean));
+  const capacidadTotal = records.reduce((a, r) => a + r.capacidadDiaria, 0);
+  const capacidadVisitantesTotal = records.reduce((a, r) => a + r.capacidadVisitantes, 0);
+  const certificacionesCount = count(records.flatMap(r => r.certificaciones));
+  const normativaCount = count(records.map(r => r.conocimientoNormatividad).filter(Boolean));
+  const productoMercado = {
+    topSegmentos: top(segmentosCount, 8),
+    topIdiomas: top(idiomasCount, 6),
+    topPublico: top(publicoCount, 5),
+    capacidadDiariaTotal: capacidadTotal,
+    capacidadVisitantesTotal,
+    topCertificaciones: top(certificacionesCount, 5),
+    topNormativa: top(normativaCount, 4),
+  };
+
   // tecnología
   const topCanales = top(count(records.flatMap(r => r.canalesDigitales)), 8);
 
@@ -149,13 +206,22 @@ export function buildStats(records: SurveyRecord[]) {
     promedioAporteTurismo: avg(records.map(r => r.nivelAporteTurismo).filter(v => v > 0)),
   };
 
+  // articulación y atractivos
+  const atractivos = top(count(records.map(r => r.atractivosCercanos).filter(Boolean)), 6);
+  const articulacion = top(count(records.map(r => r.propuestaArticulacion).filter(Boolean)), 6);
+
   // avance por barrio para el PDF/análisis territorial
-  const avanceBarrio = Object.entries(byBarrio).sort((a, b) => b[1] - a[1]).map(([nombre, cantidad]) => ({
-    nombre,
-    cantidad,
-    pctTotal: Math.round((cantidad / n) * 100),
-    scorePromedio: avg(records.filter(r => r.barrio === nombre).flatMap(r => Object.values(r.scores)).filter(v => typeof v === 'number')),
-  }));
+  const avanceBarrio = Object.entries(byBarrio).sort((a, b) => b[1] - a[1]).map(([nombre, cantidad]) => {
+    const barrioRecs = records.filter(r => r.barrio === nombre);
+    return {
+      nombre,
+      cantidad,
+      pctTotal: Math.round((cantidad / n) * 100),
+      scorePromedio: avg(barrioRecs.flatMap(r => Object.values(r.scores)).filter(v => typeof v === 'number')),
+      pctRNT: Math.round((barrioRecs.filter(r => r.tieneRNT).length / Math.max(barrioRecs.length, 1)) * 100),
+      pctRegistroMercantil: Math.round((barrioRecs.filter(r => r.tieneRegistroMercantil).length / Math.max(barrioRecs.length, 1)) * 100),
+    };
+  });
 
   return {
     total: records.length,
@@ -171,11 +237,16 @@ export function buildStats(records: SurveyRecord[]) {
     formalizacion,
     infraestructura,
     empleo,
+    perfilEmprendedores,
+    productoMercado,
     topCanales,
     pctCapacitacionPrevia,
     topNecesidadesCapacitacion,
     topPracticasSostenibilidad,
     preparacion,
+    atractivos,
+    articulacion,
     avanceBarrio,
   };
 }
+
