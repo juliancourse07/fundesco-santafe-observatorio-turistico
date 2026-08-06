@@ -65,3 +65,12 @@ El mapa usa latitud/longitud si vienen en la hoja. Si faltan, usa coordenadas ap
 ## 8. Privacidad
 
 El tablero no muestra documentos, telefonos ni correos por defecto. Si necesitas fichas internas, crea una vista privada con autenticacion.
+
+## 9. Galería e imágenes de Santa Fe
+
+El proyecto deja preparada la carpeta `public/images/santafe/` para almacenar únicamente imágenes de dominio público o con licencia libre.
+
+- La referencia de cada imagen y su crédito viven en `public/images/santafe/CREDITS.md` y `lib/santafeImages.ts`.
+- Si el archivo físico no existe, tanto la web como el PDF degradan de forma elegante con un placeholder gráfico; la generación del informe no falla.
+- Antes de agregar binarios finales, verifica autor, fuente y licencia específica del archivo elegido en Wikimedia Commons u otra fuente libre compatible.
+

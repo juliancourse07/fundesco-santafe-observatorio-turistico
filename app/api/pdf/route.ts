@@ -1,571 +1,719 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { NextRequest } from 'next/server';
-import { PDFDocument, rgb, StandardFonts, PDFPage } from 'pdf-lib';
+import { PDFDocument, PDFPage, PDFFont, StandardFonts, rgb } from 'pdf-lib';
+import { buildDeterministicAnalysis, buildFallbackSummary, sanitizePdfText, type StatsInput } from '@/lib/analysis';
+import { santafeImages } from '@/lib/santafeImages';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 const FOREST = rgb(0.063, 0.282, 0.239);
-const GREEN  = rgb(0.09, 0.55, 0.45);
-const LIME   = rgb(0.71, 0.827, 0.204);
-const CREAM  = rgb(0.97, 0.95, 0.91);
-const DARK   = rgb(0.1, 0.1, 0.1);
-const MID    = rgb(0.35, 0.35, 0.35);
-const WHITE  = rgb(1, 1, 1);
-const LIGHT  = rgb(0.95, 0.99, 0.97);
-const STRIP  = rgb(0.93, 0.97, 0.95);
+const GREEN = rgb(0.09, 0.55, 0.45);
+const LIME = rgb(0.71, 0.827, 0.204);
+const CREAM = rgb(0.97, 0.95, 0.91);
+const DARK = rgb(0.1, 0.1, 0.1);
+const MID = rgb(0.35, 0.35, 0.35);
+const WHITE = rgb(1, 1, 1);
+const LIGHT = rgb(0.95, 0.99, 0.97);
+const STRIP = rgb(0.93, 0.97, 0.95);
 
-const PW = 612, PH = 792;
-const ML = 48, MR = 564, MT = 756, MB = 44;
+const PW = 612;
+const PH = 792;
+const ML = 48;
+const MR = 564;
+const MT = 756;
+const MB = 44;
 
-function wrap(text: string, maxChars: number): string[] {
-  const words = text.split(' ');
-  const lines: string[] = [];
-  let cur = '';
-  for (const w of words) {
-    const candidate = cur ? cur + ' ' + w : w;
-    if (candidate.length > maxChars) {
-      if (cur) lines.push(cur);
-      cur = w.length > maxChars ? w.slice(0, maxChars - 1) + '…' : w;
+type Cursor = { page: PDFPage; y: number; title: string };
+type Fonts = { regular: PDFFont; bold: PDFFont };
+type TocItem = { label: string; pageNumber: number };
+type TableColumn<T> = { label: string; x: number; width?: number; value: (row: T) => string; align?: 'left' | 'right' | 'center' };
+
+function safe(text: string) {
+  return sanitizePdfText(text || '');
+}
+
+function drawText(page: PDFPage, text: string, options: Parameters<PDFPage['drawText']>[1]) {
+  page.drawText(safe(text), options);
+}
+
+function splitLongWord(word: string, width: number, font: PDFFont, size: number) {
+  const pieces: string[] = [];
+  let current = '';
+  for (const char of word) {
+    const candidate = current + char;
+    const limitReached = font.widthOfTextAtSize(candidate + '-', size) > width;
+    if (current && limitReached) {
+      pieces.push(current + '-');
+      current = char;
     } else {
-      cur = candidate;
+      current = candidate;
     }
   }
-  if (cur) lines.push(cur);
-  return lines.length ? lines : [''];
+  if (current) pieces.push(current);
+  return pieces.length ? pieces : [word];
 }
 
-function drawHeader(page: PDFPage, title: string, bold: any, pageN: number, totalPages: number) {
+function wrapToWidth(text: string, width: number, font: PDFFont, size: number) {
+  const words = safe(text).split(/\s+/).filter(Boolean);
+  if (!words.length) return [''];
+  const lines: string[] = [];
+  let current: string[] = [];
+  for (const rawWord of words) {
+    const wordParts = font.widthOfTextAtSize(rawWord, size) > width ? splitLongWord(rawWord, width, font, size) : [rawWord];
+    for (const word of wordParts) {
+      const candidate = current.length ? `${current.join(' ')} ${word}` : word;
+      if (current.length && font.widthOfTextAtSize(candidate, size) > width) {
+        lines.push(current.join(' '));
+        current = [word];
+      } else if (!current.length && font.widthOfTextAtSize(word, size) > width) {
+        lines.push(word);
+      } else {
+        current.push(word);
+      }
+    }
+  }
+  if (current.length) lines.push(current.join(' '));
+  return lines;
+}
+
+function drawJustifiedParagraph(page: PDFPage, text: string, options: {
+  x: number;
+  y: number;
+  width: number;
+  size: number;
+  font: PDFFont;
+  lineHeight: number;
+  color: ReturnType<typeof rgb>;
+  onPageBreak?: () => { page: PDFPage; y: number };
+}) {
+  let currentPage = page;
+  let currentY = options.y;
+  const paragraphs = safe(text).split(/\n+/).map((item) => item.trim()).filter(Boolean);
+  for (const paragraph of paragraphs) {
+    const lines = wrapToWidth(paragraph, options.width, options.font, options.size);
+    lines.forEach((line, index) => {
+      if (currentY < MB + options.lineHeight) {
+        const next = options.onPageBreak?.();
+        if (next) {
+          currentPage = next.page;
+          currentY = next.y;
+        }
+      }
+      const words = line.split(' ').filter(Boolean);
+      const isLastLine = index === lines.length - 1;
+      if (!isLastLine && words.length > 1) {
+        const plainWidth = words.reduce((sum, word) => sum + options.font.widthOfTextAtSize(word, options.size), 0);
+        const extra = Math.max(0, (options.width - plainWidth) / (words.length - 1));
+        let cursorX = options.x;
+        words.forEach((word, wordIndex) => {
+          drawText(currentPage, word, { x: cursorX, y: currentY, size: options.size, font: options.font, color: options.color });
+          cursorX += options.font.widthOfTextAtSize(safe(word), options.size);
+          if (wordIndex < words.length - 1) cursorX += extra;
+        });
+      } else {
+        drawText(currentPage, line, { x: options.x, y: currentY, size: options.size, font: options.font, color: options.color });
+      }
+      currentY -= options.lineHeight;
+    });
+    currentY -= 4;
+  }
+  return { page: currentPage, y: currentY };
+}
+
+function drawHeader(page: PDFPage, title: string, fonts: Fonts, pageN: number, totalPages: number) {
   page.drawRectangle({ x: 0, y: PH - 36, width: PW, height: 36, color: FOREST });
-  page.drawText('FUNDESCO · Observatorio Turístico Santa Fe', { x: ML, y: PH - 23, size: 9, font: bold, color: LIME });
-  page.drawText(title, { x: ML, y: PH - 23, size: 10, font: bold, color: WHITE, opacity: 0 }); // unused but keep slot
-  page.drawText(title, { x: 200, y: PH - 23, size: 10, font: bold, color: WHITE });
-  page.drawText(`Pág. ${pageN} / ${totalPages}`, { x: 505, y: PH - 23, size: 9, font: bold, color: LIME });
+  drawText(page, 'FUNDESCO · Observatorio Turístico Santa Fe', { x: ML, y: PH - 23, size: 9, font: fonts.bold, color: LIME });
+  drawText(page, title, { x: 212, y: PH - 23, size: 10, font: fonts.bold, color: WHITE });
+  drawText(page, `Pág. ${pageN} / ${totalPages}`, { x: 500, y: PH - 23, size: 9, font: fonts.bold, color: LIME });
 }
 
-function drawFooter(page: PDFPage, reg: any) {
+function drawFooter(page: PDFPage, fonts: Fonts) {
   page.drawRectangle({ x: 0, y: 0, width: PW, height: MB, color: FOREST });
-  page.drawText('Fundesco Santa Fe | Observatorio Turístico | Documento de trabajo', { x: ML, y: 14, size: 8, font: reg, color: WHITE });
+  drawText(page, 'Fundesco Santa Fe | Observatorio Turístico | Documento de trabajo', { x: ML, y: 14, size: 8, font: fonts.regular, color: WHITE });
 }
 
-function sectionTitle(page: PDFPage, text: string, y: number, bold: any): number {
-  page.drawRectangle({ x: ML - 8, y: y - 3, width: MR - ML + 16, height: 20, color: FOREST });
-  page.drawText(text, { x: ML, y: y + 2, size: 11, font: bold, color: WHITE });
-  return y - 26;
+function sectionTitle(cursor: Cursor, text: string, fonts: Fonts) {
+  cursor.page.drawRectangle({ x: ML - 8, y: cursor.y - 4, width: MR - ML + 16, height: 22, color: FOREST });
+  drawText(cursor.page, text, { x: ML, y: cursor.y + 2, size: 11, font: fonts.bold, color: WHITE });
+  cursor.y -= 28;
 }
 
-function subTitle(page: PDFPage, text: string, y: number, bold: any): number {
-  page.drawText(text, { x: ML, y, size: 10, font: bold, color: FOREST });
-  return y - 16;
+function subTitle(cursor: Cursor, text: string, fonts: Fonts) {
+  drawText(cursor.page, text, { x: ML, y: cursor.y, size: 10, font: fonts.bold, color: FOREST });
+  cursor.y -= 16;
 }
 
-function tableHeader(page: PDFPage, cols: Array<{label:string;x:number}>, y: number, bold: any): number {
-  page.drawRectangle({ x: ML - 4, y: y - 4, width: MR - ML + 8, height: 16, color: GREEN });
-  cols.forEach(c => page.drawText(c.label, { x: c.x, y, size: 8.5, font: bold, color: WHITE }));
-  return y - 18;
+function ensureSpace(cursor: Cursor, minHeight: number, newPage: (title: string) => Cursor) {
+  if (cursor.y - minHeight < MB + 10) return newPage(cursor.title);
+  return cursor;
 }
 
-function tableRow(page: PDFPage, cells: Array<{val:string;x:number}>, y: number, even: boolean, reg: any): number {
-  page.drawRectangle({ x: ML - 4, y: y - 4, width: MR - ML + 8, height: 14, color: even ? STRIP : WHITE });
-  cells.forEach(c => page.drawText(c.val.slice(0, 55), { x: c.x, y, size: 8.5, font: reg, color: DARK }));
-  return y - 14;
+function drawInfoBox(cursor: Cursor, title: string, body: string[], fonts: Fonts, newPage: (title: string) => Cursor) {
+  cursor = ensureSpace(cursor, 56 + body.length * 18, newPage);
+  cursor.page.drawRectangle({ x: ML, y: cursor.y - 8, width: MR - ML, height: 28, color: GREEN });
+  drawText(cursor.page, title, { x: ML + 8, y: cursor.y, size: 10, font: fonts.bold, color: WHITE });
+  const boxHeight = Math.max(56, body.length * 18 + 18);
+  cursor.page.drawRectangle({ x: ML, y: cursor.y - boxHeight, width: MR - ML, height: boxHeight - 10, color: WHITE, borderColor: LIME, borderWidth: 1.2 });
+  cursor.y -= 26;
+  for (const paragraph of body) {
+    const result = drawJustifiedParagraph(cursor.page, paragraph, {
+      x: ML + 10,
+      y: cursor.y,
+      width: MR - ML - 20,
+      size: 9,
+      font: fonts.regular,
+      lineHeight: 13,
+      color: DARK,
+      onPageBreak: () => {
+        cursor = newPage(cursor.title);
+        return { page: cursor.page, y: cursor.y };
+      },
+    });
+    cursor.page = result.page;
+    cursor.y = result.y;
+  }
+  cursor.y -= 6;
+  return cursor;
 }
 
-function miniBar(page: PDFPage, label: string, value: number, maxValue: number, y: number, bold: any, reg: any): number {
+function drawBulletList(cursor: Cursor, items: string[], fonts: Fonts, newPage: (title: string) => Cursor) {
+  for (const item of items) {
+    cursor = ensureSpace(cursor, 30, newPage);
+    drawText(cursor.page, '•', { x: ML, y: cursor.y, size: 11, font: fonts.bold, color: FOREST });
+    const result = drawJustifiedParagraph(cursor.page, item, {
+      x: ML + 14,
+      y: cursor.y,
+      width: MR - ML - 14,
+      size: 9,
+      font: fonts.regular,
+      lineHeight: 13,
+      color: DARK,
+      onPageBreak: () => {
+        cursor = newPage(cursor.title);
+        return { page: cursor.page, y: cursor.y };
+      },
+    });
+    cursor.page = result.page;
+    cursor.y = result.y - 2;
+  }
+  return cursor;
+}
+
+function drawPctBar(cursor: Cursor, label: string, pctValue: number, fonts: Fonts, newPage: (title: string) => Cursor) {
+  cursor = ensureSpace(cursor, 18, newPage);
+  const bw = 160;
+  const fill = Math.max(4, Math.round((Math.max(0, pctValue) / 100) * bw));
+  drawText(cursor.page, label, { x: ML, y: cursor.y, size: 8.5, font: fonts.regular, color: DARK });
+  cursor.page.drawRectangle({ x: ML + 190, y: cursor.y - 2, width: bw, height: 10, color: LIGHT });
+  cursor.page.drawRectangle({ x: ML + 190, y: cursor.y - 2, width: fill, height: 10, color: GREEN });
+  drawText(cursor.page, `${pctValue}%`, { x: ML + 360, y: cursor.y, size: 8.5, font: fonts.bold, color: FOREST });
+  cursor.y -= 16;
+  return cursor;
+}
+
+function drawMiniBar(cursor: Cursor, label: string, value: number, maxValue: number, fonts: Fonts, newPage: (title: string) => Cursor) {
+  cursor = ensureSpace(cursor, 18, newPage);
   const bw = 200;
   const fill = maxValue > 0 ? Math.max(4, Math.round((value / maxValue) * bw)) : 4;
-  page.drawText(label.slice(0, 44), { x: ML, y, size: 8.5, font: reg, color: DARK });
-  page.drawRectangle({ x: ML + 230, y: y - 2, width: bw, height: 10, color: LIGHT });
-  page.drawRectangle({ x: ML + 230, y: y - 2, width: fill, height: 10, color: GREEN });
-  page.drawText(String(value), { x: ML + 235 + bw, y, size: 8.5, font: bold, color: FOREST });
-  return y - 16;
+  drawText(cursor.page, label, { x: ML, y: cursor.y, size: 8.5, font: fonts.regular, color: DARK });
+  cursor.page.drawRectangle({ x: ML + 230, y: cursor.y - 2, width: bw, height: 10, color: LIGHT });
+  cursor.page.drawRectangle({ x: ML + 230, y: cursor.y - 2, width: fill, height: 10, color: GREEN });
+  drawText(cursor.page, String(value), { x: ML + 440, y: cursor.y, size: 8.5, font: fonts.bold, color: FOREST });
+  cursor.y -= 16;
+  return cursor;
 }
 
-function pctBar(page: PDFPage, label: string, pct: number, y: number, bold: any, reg: any): number {
-  const bw = 160;
-  const fill = Math.max(4, Math.round((pct / 100) * bw));
-  page.drawText(label.slice(0, 36), { x: ML, y, size: 8.5, font: reg, color: DARK });
-  page.drawRectangle({ x: ML + 190, y: y - 2, width: bw, height: 10, color: LIGHT });
-  page.drawRectangle({ x: ML + 190, y: y - 2, width: fill, height: 10, color: GREEN });
-  page.drawText(`${pct}%`, { x: ML + 195 + bw, y, size: 8.5, font: bold, color: FOREST });
-  return y - 16;
+function truncate(text: string, limit = 58) {
+  const sanitized = safe(text);
+  return sanitized.length > limit ? `${sanitized.slice(0, limit - 1)}…` : sanitized;
+}
+
+function drawTableHeader<T>(cursor: Cursor, columns: TableColumn<T>[], fonts: Fonts, newPage: (title: string) => Cursor) {
+  cursor = ensureSpace(cursor, 20, newPage);
+  cursor.page.drawRectangle({ x: ML - 4, y: cursor.y - 4, width: MR - ML + 8, height: 16, color: GREEN });
+  columns.forEach((column) => drawText(cursor.page, column.label, { x: column.x, y: cursor.y, size: 8.5, font: fonts.bold, color: WHITE }));
+  cursor.y -= 18;
+  return cursor;
+}
+
+function drawTableRows<T>(cursor: Cursor, rows: T[], columns: TableColumn<T>[], fonts: Fonts, newPage: (title: string) => Cursor) {
+  rows.forEach((row, rowIndex) => {
+    cursor = ensureSpace(cursor, 15, newPage);
+    cursor.page.drawRectangle({ x: ML - 4, y: cursor.y - 4, width: MR - ML + 8, height: 14, color: rowIndex % 2 === 0 ? STRIP : WHITE });
+    columns.forEach((column) => {
+      const value = truncate(column.value(row), column.width ? Math.max(10, Math.floor(column.width / 5.8)) : 60);
+      const textWidth = fonts.regular.widthOfTextAtSize(value, 8.5);
+      let x = column.x;
+      if (column.align === 'right' && column.width) x = column.x + column.width - textWidth;
+      if (column.align === 'center' && column.width) x = column.x + (column.width - textWidth) / 2;
+      drawText(cursor.page, value, { x, y: cursor.y, size: 8.5, font: fonts.regular, color: DARK });
+    });
+    cursor.y -= 14;
+  });
+  return cursor;
+}
+
+async function readLocalImage(relativeSrc: string) {
+  const absolute = path.join(process.cwd(), 'public', relativeSrc.replace(/^\//, ''));
+  try {
+    return await fs.readFile(absolute);
+  } catch {
+    return null;
+  }
+}
+
+async function drawContextImage(pdfDoc: PDFDocument, cursor: Cursor, imageMeta: typeof santafeImages[number], fonts: Fonts, options: { width: number; height: number }) {
+  const bytes = await readLocalImage(imageMeta.src);
+  const boxY = cursor.y - options.height;
+  if (bytes) {
+    try {
+      const image = imageMeta.src.toLowerCase().endsWith('.png') ? await pdfDoc.embedPng(bytes) : await pdfDoc.embedJpg(bytes);
+      const dims = image.scaleToFit(options.width, options.height);
+      const x = ML + (options.width - dims.width) / 2;
+      cursor.page.drawImage(image, { x, y: boxY + (options.height - dims.height), width: dims.width, height: dims.height });
+    } catch {
+      cursor.page.drawRectangle({ x: ML, y: boxY, width: options.width, height: options.height, color: LIGHT, borderColor: LIME, borderWidth: 1.2 });
+    }
+  } else {
+    cursor.page.drawRectangle({ x: ML, y: boxY, width: options.width, height: options.height, color: LIGHT, borderColor: LIME, borderWidth: 1.2 });
+    drawText(cursor.page, imageMeta.title, { x: ML + 14, y: boxY + options.height - 24, size: 14, font: fonts.bold, color: FOREST });
+    drawText(cursor.page, 'Placeholder grafico: el archivo libre definitivo no existe en esta copia local.', { x: ML + 14, y: boxY + options.height - 44, size: 8.5, font: fonts.regular, color: MID });
+    drawText(cursor.page, imageMeta.credit, { x: ML + 14, y: boxY + 18, size: 7.5, font: fonts.regular, color: MID });
+  }
+  cursor.y = boxY - 10;
+  drawText(cursor.page, imageMeta.caption, { x: ML, y: cursor.y, size: 8, font: fonts.regular, color: MID });
+  cursor.y -= 10;
+  drawText(cursor.page, `${imageMeta.credit} Fuente: ${imageMeta.source}`, { x: ML, y: cursor.y, size: 7, font: fonts.regular, color: MID });
+  cursor.y -= 14;
+  return cursor;
+}
+
+function parseSummary(summary: string) {
+  return safe(summary).split('\n').map((line) => line.trimEnd());
+}
+
+function renderSummaryLines(cursor: Cursor, lines: string[], fonts: Fonts, newPage: (title: string) => Cursor) {
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) {
+      cursor.y -= 6;
+      continue;
+    }
+    if (/^#{1,3}\s+/.test(line)) {
+      cursor = ensureSpace(cursor, 18, newPage);
+      subTitle(cursor, line.replace(/^#{1,3}\s+/, ''), fonts);
+      continue;
+    }
+    if (line.startsWith('- ')) {
+      cursor = drawBulletList(cursor, [line.slice(2)], fonts, newPage);
+      continue;
+    }
+    const result = drawJustifiedParagraph(cursor.page, line, {
+      x: ML,
+      y: cursor.y,
+      width: MR - ML,
+      size: 9,
+      font: fonts.regular,
+      lineHeight: 13,
+      color: DARK,
+      onPageBreak: () => {
+        cursor = newPage(cursor.title);
+        return { page: cursor.page, y: cursor.y };
+      },
+    });
+    cursor.page = result.page;
+    cursor.y = result.y;
+  }
+  return cursor;
 }
 
 export async function POST(request: NextRequest) {
   const payload = await request.json().catch(() => ({}));
-  const stats = payload?.stats ?? {};
-  const summary: string = payload?.summary ?? '';
+  const stats: StatsInput = payload?.stats ?? { total: 0, rutas: 0, exactos: 0, estimados: 0 };
+  const summaryInput: string = payload?.summary ?? '';
   const updatedAt: string = payload?.updatedAt ?? new Date().toLocaleString('es-CO');
   const mapImageBase64: string = payload?.mapImageBase64 ?? '';
-
   const pdfDoc = await PDFDocument.create();
-  const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-  const fontReg  = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const fonts: Fonts = {
+    bold: await pdfDoc.embedFont(StandardFonts.HelveticaBold),
+    regular: await pdfDoc.embedFont(StandardFonts.Helvetica),
+  };
+  const analysis = buildDeterministicAnalysis(stats);
+  const summary = summaryInput.trim() ? summaryInput : buildFallbackSummary(stats);
+  const pageTitles = new Map<PDFPage, string>();
+  const tocItems: TocItem[] = [];
 
-  // ─── Count total pages upfront ───────────────────────────────────────────
-  // We'll do a two-pass approach: first add all pages, then draw headers/footers
-  // For simplicity, pre-estimate total pages:
-  const hasMap = !!mapImageBase64;
-  const hasSummary = !!summary;
-  const hasBarrio = (stats.avanceBarrio?.length ?? 0) > 0;
-  const hasUpz = (stats.byUpz?.length ?? 0) > 0;
-  const hasTipo = (stats.byTipo?.length ?? 0) > 0;
-  const hasPerfil = !!(stats.perfilEmprendedores);
-  const hasMercado = !!(stats.productoMercado);
-  const hasEncuestadores = (stats.topEncuestadores?.length ?? 0) > 0;
-  const hasFecha = (stats.byFecha?.length ?? 0) > 1;
-
-  // Estimate page count
-  let totalPages = 2; // cover + TOC
-  if (hasSummary) totalPages++;
-  if (hasMap) totalPages++;
-  totalPages++; // geo analysis (always)
-  totalPages++; // formalizacion + infraestructura
-  totalPages++; // empleo + perfil
-  if (hasMercado) totalPages++;
-  if (hasEncuestadores || hasFecha) totalPages++;
-  totalPages++; // scores + necesidades
-
-  // ─── PAGE 1: Cover ───────────────────────────────────────────────────────
   const cover = pdfDoc.addPage([PW, PH]);
-  // Background
-  cover.drawRectangle({ x: 0, y: 0, width: PW, height: PH, color: rgb(0.975, 0.96, 0.93) });
-  // Header band
-  cover.drawRectangle({ x: 0, y: PH - 200, width: PW, height: 200, color: FOREST });
-  cover.drawRectangle({ x: 0, y: PH - 208, width: PW, height: 8, color: LIME });
-  cover.drawText('FUNDESCO', { x: ML, y: PH - 50, size: 13, font: fontBold, color: LIME });
-  cover.drawText('Observatorio Turístico de Santa Fe', { x: ML, y: PH - 78, size: 22, font: fontBold, color: WHITE });
-  cover.drawText('Informe de Avance — Caracterización Territorial del Ecosistema Turístico', { x: ML, y: PH - 106, size: 11, font: fontReg, color: rgb(0.85, 0.95, 0.9) });
-  cover.drawText('Bogotá D.C. | Localidad Santa Fe', { x: ML, y: PH - 128, size: 10, font: fontReg, color: rgb(0.75, 0.88, 0.82) });
-
-  // Meta box
-  cover.drawRectangle({ x: ML, y: PH - 330, width: MR - ML, height: 110, color: WHITE, borderColor: LIME, borderWidth: 1.5 });
-  cover.drawRectangle({ x: ML, y: PH - 245, width: MR - ML, height: 26, color: GREEN });
-  cover.drawText('Resumen ejecutivo del período', { x: ML + 8, y: PH - 237, size: 10, font: fontBold, color: WHITE });
-
-  const periodo = (stats.fechaInicio && stats.fechaFin) ? `${stats.fechaInicio} – ${stats.fechaFin}` : 'N/D';
-  const metaRows = [
-    { label: 'Período de recolección:', val: periodo },
-    { label: 'Total de registros analizados:', val: String(stats.total ?? 0) },
-    { label: 'Interés en rutas turísticas:', val: `${stats.rutas ?? 0} emprendimientos` },
-    { label: 'Tasa de completitud:', val: `${stats.tasaCompletitud ?? 0}%` },
-  ];
-  metaRows.forEach((row, i) => {
-    const y = PH - 264 - i * 18;
-    cover.drawText(row.label, { x: ML + 8, y, size: 9, font: fontBold, color: FOREST });
-    cover.drawText(row.val, { x: ML + 190, y, size: 9, font: fontReg, color: DARK });
+  cover.drawRectangle({ x: 0, y: 0, width: PW, height: PH, color: CREAM });
+  cover.drawRectangle({ x: 0, y: PH - 220, width: PW, height: 220, color: FOREST });
+  cover.drawRectangle({ x: 0, y: PH - 228, width: PW, height: 8, color: LIME });
+  drawText(cover, 'FUNDESCO', { x: ML, y: PH - 50, size: 13, font: fonts.bold, color: LIME });
+  drawText(cover, 'Observatorio Turístico de Santa Fe', { x: ML, y: PH - 78, size: 22, font: fonts.bold, color: WHITE });
+  drawText(cover, 'Informe ampliado de caracterización territorial y madurez del ecosistema turístico', { x: ML, y: PH - 104, size: 11, font: fonts.regular, color: rgb(0.85, 0.95, 0.9) });
+  drawText(cover, 'Bogotá D.C. | Localidad Santa Fe', { x: ML, y: PH - 126, size: 10, font: fonts.regular, color: rgb(0.75, 0.88, 0.82) });
+  cover.drawRectangle({ x: ML, y: PH - 350, width: MR - ML, height: 118, color: WHITE, borderColor: LIME, borderWidth: 1.5 });
+  cover.drawRectangle({ x: ML, y: PH - 258, width: MR - ML, height: 26, color: GREEN });
+  drawText(cover, 'Resumen ejecutivo del periodo', { x: ML + 8, y: PH - 250, size: 10, font: fonts.bold, color: WHITE });
+  [
+    ['Periodo de recolección', `${stats.fechaInicio || 'N/D'} - ${stats.fechaFin || 'N/D'}`],
+    ['Total de registros analizados', String(stats.total ?? 0)],
+    ['Interés en rutas turísticas', `${stats.rutas ?? 0} emprendimientos`],
+    ['Tasa de completitud', `${stats.tasaCompletitud ?? 0}%`],
+    ['Índice de madurez', `${analysis.maturity.score}/100 (${analysis.maturity.level})`],
+  ].forEach(([label, value], index) => {
+    const y = PH - 277 - index * 18;
+    drawText(cover, `${label}:`, { x: ML + 8, y, size: 9, font: fonts.bold, color: FOREST });
+    drawText(cover, value, { x: ML + 185, y, size: 9, font: fonts.regular, color: DARK });
   });
-
-  // KPI cards
-  cover.drawText('Indicadores clave', { x: ML, y: PH - 352, size: 12, font: fontBold, color: FOREST });
-  const kpis = [
-    { l: 'Total registros',    v: String(stats.total ?? 0) },
-    { l: 'Interés en rutas',   v: String(stats.rutas ?? 0) },
-    { l: 'Puntos exactos',     v: String(stats.exactos ?? 0) },
-    { l: 'Tasa completitud',   v: `${stats.tasaCompletitud ?? 0}%` },
-  ];
-  kpis.forEach((k, i) => {
-    const x = ML + i * 130;
-    cover.drawRectangle({ x, y: PH - 420, width: 122, height: 58, color: WHITE, borderColor: GREEN, borderWidth: 1.5 });
-    cover.drawText(k.v, { x: x + 8, y: PH - 388, size: 20, font: fontBold, color: FOREST });
-    cover.drawText(k.l, { x: x + 8, y: PH - 408, size: 8.5, font: fontReg, color: MID });
-  });
-
-  // Scores bar chart on cover
-  const scores: Array<{name:string;value:number}> = stats.scores ?? [];
-  if (scores.length) {
-    cover.drawText('Scores de fortalecimiento por dimensión (escala 1–5)', { x: ML, y: PH - 442, size: 10, font: fontBold, color: FOREST });
-    const maxSc = 5;
-    scores.forEach((sc, i) => {
-      const y = PH - 462 - i * 20;
-      const bw = Math.max(4, Math.round((sc.value / maxSc) * 200));
-      cover.drawRectangle({ x: ML, y: y - 3, width: 200, height: 13, color: LIGHT });
-      cover.drawRectangle({ x: ML, y: y - 3, width: bw, height: 13, color: GREEN });
-      cover.drawText(sc.name, { x: ML + 208, y, size: 9, font: fontReg, color: DARK });
-      cover.drawText(String(sc.value), { x: MR - 18, y, size: 9, font: fontBold, color: FOREST });
-    });
-  }
-
-  // Cover footer
+  const coverCursor: Cursor = { page: cover, y: PH - 395, title: 'Portada' };
+  await drawContextImage(pdfDoc, coverCursor, santafeImages[0], fonts, { width: MR - ML, height: 200 });
   cover.drawRectangle({ x: 0, y: 0, width: PW, height: 44, color: FOREST });
-  cover.drawText('Documento generado automáticamente por el sistema de monitoreo Fundesco', { x: ML, y: 26, size: 8.5, font: fontReg, color: rgb(0.7, 0.85, 0.8) });
-  cover.drawText(`Generado: ${updatedAt}`, { x: ML, y: 12, size: 8, font: fontReg, color: rgb(0.6, 0.75, 0.7) });
+  drawText(cover, 'Documento generado automáticamente por el sistema de monitoreo Fundesco', { x: ML, y: 26, size: 8.5, font: fonts.regular, color: rgb(0.7, 0.85, 0.8) });
+  drawText(cover, `Generado: ${updatedAt}`, { x: ML, y: 12, size: 8, font: fonts.regular, color: rgb(0.6, 0.75, 0.7) });
 
-  // ─── PAGE 2: Table of Contents ────────────────────────────────────────────
   const tocPage = pdfDoc.addPage([PW, PH]);
-  drawHeader(tocPage, 'Tabla de contenido', fontBold, 2, totalPages);
-  drawFooter(tocPage, fontReg);
+  pageTitles.set(tocPage, 'Tabla de contenido');
 
-  let ty = MT - 10;
-  tocPage.drawText('Tabla de contenido', { x: ML, y: ty, size: 16, font: fontBold, color: FOREST });
-  ty -= 8;
-  tocPage.drawRectangle({ x: ML, y: ty, width: MR - ML, height: 2, color: LIME });
-  ty -= 20;
+  const newPage = (title: string): Cursor => {
+    const page = pdfDoc.addPage([PW, PH]);
+    pageTitles.set(page, title);
+    return { page, y: MT - 10, title };
+  };
 
-  let tocPageNum = 3;
-  const tocItems: Array<{label:string; pg:number}> = [];
-  tocItems.push({ label: '1. Resumen ejecutivo', pg: tocPageNum++ });
-  if (hasMap) tocItems.push({ label: '2. Mapa territorial', pg: tocPageNum++ });
-  tocItems.push({ label: (hasMap ? '3' : '2') + '. Análisis geográfico por barrio', pg: tocPageNum++ });
-  tocItems.push({ label: (hasMap ? '4' : '3') + '. Formalización e infraestructura', pg: tocPageNum++ });
-  tocItems.push({ label: (hasMap ? '5' : '4') + '. Empleo y perfil del emprendedor', pg: tocPageNum++ });
-  if (hasMercado) tocItems.push({ label: (hasMap ? '6' : '5') + '. Producto turístico y mercado', pg: tocPageNum++ });
-  if (hasEncuestadores || hasFecha) tocItems.push({ label: (hasMap ? '7' : '6') + '. Recolección y encuestadores', pg: tocPageNum++ });
-  tocItems.push({ label: (hasMap ? '8' : '7') + '. Capacidades, necesidades y sostenibilidad', pg: tocPageNum++ });
+  const startSection = (label: string): Cursor => {
+    const cursor = newPage(label);
+    tocItems.push({ label, pageNumber: pdfDoc.getPageCount() });
+    sectionTitle(cursor, label.toUpperCase(), fonts);
+    return cursor;
+  };
 
-  tocItems.forEach((item, i) => {
-    const y = ty - i * 26;
-    const dots = '.'.repeat(Math.max(2, 80 - item.label.length));
-    tocPage.drawRectangle({ x: ML - 4, y: y - 5, width: MR - ML + 8, height: 22, color: i % 2 === 0 ? STRIP : WHITE });
-    tocPage.drawText(item.label, { x: ML + 4, y: y + 3, size: 10, font: fontBold, color: FOREST });
-    tocPage.drawText(dots, { x: ML + 4 + item.label.length * 5.5, y: y + 3, size: 9, font: fontReg, color: rgb(0.7, 0.7, 0.7) });
-    tocPage.drawText(String(item.pg), { x: MR - 16, y: y + 3, size: 10, font: fontBold, color: FOREST });
-  });
+  const sectionLabels = (() => {
+    const labels = [
+      'Resumen ejecutivo',
+      'Contexto territorial',
+      mapImageBase64 ? 'Mapa territorial' : null,
+      'Metodología y hallazgos clave',
+      'Concentración y lectura geográfica',
+      'Formalización e infraestructura',
+      'Empleo e índice de madurez',
+      'Mercado, capacidades y sostenibilidad',
+      (stats.byFecha?.length || stats.topEncuestadores?.length || stats.completitudDist?.length) ? 'Recolección y calidad de datos' : null,
+      'Brechas y recomendaciones',
+      'Anexo técnico y glosario',
+      'Créditos fotográficos',
+    ].filter(Boolean) as string[];
+    return labels.map((label, index) => `${index + 1}. ${label}`);
+  })();
 
-  let currentPageNum = 3;
+  let sectionIndex = 0;
 
-  // ─── PAGE 3: Executive Summary (AI) ──────────────────────────────────────
-  if (hasSummary) {
-    const aiPage = pdfDoc.addPage([PW, PH]);
-    drawHeader(aiPage, '1. Resumen ejecutivo', fontBold, currentPageNum++, totalPages);
-    drawFooter(aiPage, fontReg);
-    let ay = MT - 10;
-    ay = sectionTitle(aiPage, '1. RESUMEN EJECUTIVO', ay, fontBold);
-    const summaryLines = summary.split('\n');
-    for (const raw of summaryLines) {
-      if (ay < MB + 20) break;
-      const isH = /^#{1,3}\s+/.test(raw);
-      const line = raw.replace(/^#{1,3}\s+/, '');
-      if (isH) {
-        ay -= 4;
-        ay = subTitle(aiPage, line, ay, fontBold);
-      } else if (line.trim() === '') {
-        ay -= 6;
-      } else {
-        for (const wl of wrap(line, 93)) {
-          if (ay < MB + 20) break;
-          aiPage.drawText(wl, { x: ML, y: ay, size: 9, font: fontReg, color: DARK });
-          ay -= 13;
-        }
-      }
-    }
+  let cursor = startSection(sectionLabels[sectionIndex++]);
+  cursor = renderSummaryLines(cursor, parseSummary(summary), fonts, newPage);
+
+  cursor = startSection(sectionLabels[sectionIndex++]);
+  const introText = ['La lectura del observatorio se enriquece con referentes de paisaje, patrimonio y espacio público que ayudan a entender cómo la oferta turística se inserta en Santa Fe. Cuando el archivo local de la imagen no existe, el informe preserva la estructura visual mediante un placeholder y mantiene visible la fuente prevista para la curaduría final.'];
+  cursor = drawInfoBox(cursor, 'Contexto territorial de la localidad', introText, fonts, newPage);
+  for (const image of santafeImages) {
+    cursor = ensureSpace(cursor, 230, newPage);
+    cursor = await drawContextImage(pdfDoc, cursor, image, fonts, { width: MR - ML, height: 150 });
   }
 
-  // ─── PAGE: Map ────────────────────────────────────────────────────────────
-  if (hasMap) {
-    const mapPage = pdfDoc.addPage([PW, PH]);
-    drawHeader(mapPage, '2. Mapa territorial', fontBold, currentPageNum++, totalPages);
-    drawFooter(mapPage, fontReg);
-    let my = MT - 10;
-    my = sectionTitle(mapPage, '2. MAPA TERRITORIAL — LOCALIDAD SANTA FE', my, fontBold);
+  if (mapImageBase64) {
+    cursor = startSection(sectionLabels[sectionIndex++]);
+    cursor = drawInfoBox(cursor, 'Interpretación del mapa', [
+      `El mapa territorial combina ${stats.exactos || 0} puntos exactos y ${stats.estimados || 0} puntos estimados por centroide de barrio.`,
+      analysis.concentration.paragraph,
+    ], fonts, newPage);
     try {
       const imgBytes = Buffer.from(mapImageBase64.replace(/^data:image\/\w+;base64,/, ''), 'base64');
-      let img;
-      if (mapImageBase64.startsWith('data:image/jpeg') || mapImageBase64.startsWith('data:image/jpg')) {
-        img = await pdfDoc.embedJpg(imgBytes);
-      } else {
-        img = await pdfDoc.embedPng(imgBytes);
-      }
-      const imgDims = img.scaleToFit(MR - ML, 340);
-      mapPage.drawImage(img, { x: ML, y: my - imgDims.height, width: imgDims.width, height: imgDims.height });
-      my -= imgDims.height + 10;
+      const image = mapImageBase64.startsWith('data:image/png') ? await pdfDoc.embedPng(imgBytes) : await pdfDoc.embedJpg(imgBytes);
+      const dims = image.scaleToFit(MR - ML, 300);
+      cursor.page.drawImage(image, { x: ML + (MR - ML - dims.width) / 2, y: cursor.y - dims.height, width: dims.width, height: dims.height });
+      cursor.y -= dims.height + 12;
+      drawText(cursor.page, 'Leyenda: punto exacto = ubicación capturada en campo; punto estimado = centroide del barrio.', { x: ML, y: cursor.y, size: 8, font: fonts.regular, color: MID });
+      cursor.y -= 16;
     } catch {
-      mapPage.drawText('[No fue posible embeber el mapa en esta versión del informe]', { x: ML, y: my, size: 9, font: fontReg, color: MID });
-      my -= 20;
-    }
-    // Map legend
-    mapPage.drawText('Leyenda del mapa:', { x: ML, y: my, size: 9, font: fontBold, color: FOREST });
-    my -= 14;
-    const legendItems = [
-      { color: GREEN, label: 'Punto exacto (coordenadas GPS del emprendimiento)' },
-      { color: rgb(0.79, 0.55, 0.02), label: 'Punto estimado (centroide del barrio)' },
-      { color: rgb(0.07, 0.39, 0.2), label: 'Alta concentración (choropleth oscuro)' },
-    ];
-    legendItems.forEach(li => {
-      mapPage.drawRectangle({ x: ML, y: my - 2, width: 12, height: 10, color: li.color });
-      mapPage.drawText(li.label, { x: ML + 18, y: my, size: 8.5, font: fontReg, color: DARK });
-      my -= 15;
-    });
-  }
-
-  // ─── PAGE: Geographic analysis ────────────────────────────────────────────
-  const geoPage = pdfDoc.addPage([PW, PH]);
-  const geoSec = hasMap ? '3' : '2';
-  drawHeader(geoPage, `${geoSec}. Análisis geográfico`, fontBold, currentPageNum++, totalPages);
-  drawFooter(geoPage, fontReg);
-  let gy = MT - 10;
-  gy = sectionTitle(geoPage, `${geoSec}. ANÁLISIS GEOGRÁFICO POR BARRIO / UPZ`, gy, fontBold);
-
-  if (hasBarrio) {
-    gy = subTitle(geoPage, `Tabla ${geoSec}.1 — Distribución por barrio (n=${stats.total})`, gy, fontBold);
-    const cols1 = [
-      { label: 'Barrio', x: ML },
-      { label: 'Encuestas', x: ML + 175 },
-      { label: '% total', x: ML + 255 },
-      { label: 'Score prom.', x: ML + 320 },
-      { label: '% RNT', x: ML + 410 },
-      { label: '% Reg.Merc.', x: ML + 460 },
-    ];
-    gy = tableHeader(geoPage, cols1, gy, fontBold);
-    (stats.avanceBarrio ?? []).forEach((b: any, i: number) => {
-      if (gy < MB + 20) return;
-      gy = tableRow(geoPage, [
-        { val: b.nombre, x: ML },
-        { val: String(b.cantidad), x: ML + 185 },
-        { val: `${b.pctTotal}%`, x: ML + 258 },
-        { val: b.scorePromedio > 0 ? `${b.scorePromedio.toFixed(1)}/5` : '—', x: ML + 323 },
-        { val: b.pctRNT !== undefined ? `${b.pctRNT}%` : '—', x: ML + 413 },
-        { val: b.pctRegistroMercantil !== undefined ? `${b.pctRegistroMercantil}%` : '—', x: ML + 463 },
-      ], gy, i % 2 === 0, fontReg);
-    });
-    gy -= 6;
-  }
-
-  if (hasUpz && gy > MB + 80) {
-    gy = subTitle(geoPage, `Tabla ${geoSec}.2 — Distribución por UPZ (n=${stats.total})`, gy, fontBold);
-    const cols2 = [{ label: 'UPZ', x: ML }, { label: 'Encuestas', x: ML + 250 }, { label: '% total', x: ML + 340 }];
-    gy = tableHeader(geoPage, cols2, gy, fontBold);
-    const upzTotal = stats.total || 1;
-    (stats.byUpz ?? []).forEach((u: any, i: number) => {
-      if (gy < MB + 20) return;
-      gy = tableRow(geoPage, [
-        { val: u.name, x: ML },
-        { val: String(u.value), x: ML + 260 },
-        { val: `${Math.round(u.value / upzTotal * 100)}%`, x: ML + 343 },
-      ], gy, i % 2 === 0, fontReg);
-    });
-  }
-
-  // ─── PAGE: Formalización + Infraestructura ────────────────────────────────
-  const fPage = pdfDoc.addPage([PW, PH]);
-  const fSec = hasMap ? '4' : '3';
-  drawHeader(fPage, `${fSec}. Formalización e infraestructura`, fontBold, currentPageNum++, totalPages);
-  drawFooter(fPage, fontReg);
-  let fy = MT - 10;
-  gy = sectionTitle(fPage, `${fSec}. FORMALIZACIÓN E INFRAESTRUCTURA`, fy, fontBold);
-  fy = gy;
-
-  const fz = stats.formalizacion;
-  const inf = stats.infraestructura;
-
-  if (fz) {
-    fy = subTitle(fPage, `Gráfico ${fSec}.1 — Indicadores de formalización (n=${stats.total})`, fy, fontBold);
-    const fzRows = [
-      { label: 'Registro Mercantil / Cámara de Comercio', pct: fz.pctRegistroMercantil },
-      { label: 'Registro Nacional de Turismo (RNT)', pct: fz.pctRNT },
-      { label: 'RUT', pct: fz.pctRUT },
-      { label: 'Facturación electrónica', pct: fz.pctFacturacionElectronica },
-      { label: 'Afiliación a seguridad social', pct: fz.pctAfiliacionSS ?? 0 },
-      { label: 'Seguro de responsabilidad civil', pct: fz.pctSeguro ?? 0 },
-    ];
-    fzRows.forEach(row => { fy = pctBar(fPage, row.label, row.pct, fy, fontBold, fontReg); });
-    fy -= 8;
-    fPage.drawText('Nota: Valores sobre total de registros. Nulos/no respuesta excluidos del numerador.', { x: ML, y: fy, size: 7.5, font: fontReg, color: MID });
-    fy -= 20;
-  }
-
-  if (inf) {
-    fy = subTitle(fPage, `Gráfico ${fSec}.2 — Indicadores de infraestructura (n=${stats.total})`, fy, fontBold);
-    const infRows = [
-      { label: 'Sede física', pct: inf.pctSedeFisica },
-      { label: 'Señalización visible', pct: inf.pctSeñalizacion },
-      { label: 'Baños disponibles', pct: inf.pctBanos },
-      { label: 'Botiquín / emergencias', pct: inf.pctBotiquin },
-      { label: 'Conectividad a internet', pct: inf.pctConectividad },
-    ];
-    infRows.forEach(row => { fy = pctBar(fPage, row.label, row.pct, fy, fontBold, fontReg); });
-    fy -= 6;
-    fPage.drawText('Nota: Valores sobre total de registros. Conectividad = cualquier respuesta distinta de "No".', { x: ML, y: fy, size: 7.5, font: fontReg, color: MID });
-  }
-
-  // ─── PAGE: Empleo + Perfil ────────────────────────────────────────────────
-  const ePage = pdfDoc.addPage([PW, PH]);
-  const eSec = hasMap ? '5' : '4';
-  drawHeader(ePage, `${eSec}. Empleo y perfil`, fontBold, currentPageNum++, totalPages);
-  drawFooter(ePage, fontReg);
-  let ey = MT - 10;
-  ey = sectionTitle(ePage, `${eSec}. EMPLEO Y PERFIL DEL EMPRENDEDOR`, ey, fontBold);
-
-  const emp = stats.empleo;
-  if (emp) {
-    ey = subTitle(ePage, `Tabla ${eSec}.1 — Indicadores de empleo (n=${stats.total})`, ey, fontBold);
-    const empRows = [
-      ['Empleos formales', String(emp.totalFormales)],
-      ['Empleos informales / familiares', String(emp.totalInformales)],
-      ['Mujeres vinculadas', String(emp.totalMujeres)],
-      ['Jóvenes vinculados', String(emp.totalJovenes)],
-      ['Adultos mayores (60+)', String(emp.totalMayores60)],
-      ['Población diversa / diferencial', String(emp.totalDiversidad)],
-      ['Total personas vinculadas', String(emp.totalFormales + emp.totalInformales)],
-    ];
-    ey = tableHeader(ePage, [{label:'Indicador',x:ML},{label:'Total',x:ML+340}], ey, fontBold);
-    empRows.forEach((r, i) => { ey = tableRow(ePage, [{val:r[0],x:ML},{val:r[1],x:ML+342}], ey, i%2===0, fontReg); });
-    ey -= 10;
-  }
-
-  const pe = stats.perfilEmprendedores;
-  if (pe) {
-    if (pe.promedioEdad > 0) {
-      ey = subTitle(ePage, `Estadísticos del representante — edad promedio: ${pe.promedioEdad} años`, ey, fontBold);
-    }
-    if (pe.topGenero?.length) {
-      ey = subTitle(ePage, `Gráfico ${eSec}.2 — Género del representante (n=${stats.total})`, ey, fontBold);
-      const maxG = pe.topGenero[0]?.value ?? 1;
-      pe.topGenero.forEach((g: any) => { ey = miniBar(ePage, g.name, g.value, maxG, ey, fontBold, fontReg); });
-      ey -= 6;
-    }
-    if (pe.topEducacion?.length) {
-      ey = subTitle(ePage, `Gráfico ${eSec}.3 — Nivel educativo del representante (n=${stats.total})`, ey, fontBold);
-      const maxE = pe.topEducacion[0]?.value ?? 1;
-      pe.topEducacion.slice(0,6).forEach((g: any) => { ey = miniBar(ePage, g.name, g.value, maxE, ey, fontBold, fontReg); });
+      cursor = drawInfoBox(cursor, 'Mapa no disponible', ['No fue posible embeber la captura del mapa en esta generación. El PDF continúa con el análisis territorial sin interrumpirse.'], fonts, newPage);
     }
   }
 
-  // ─── PAGE: Producto y mercado ─────────────────────────────────────────────
-  if (hasMercado) {
-    const mPage = pdfDoc.addPage([PW, PH]);
-    const mSec = hasMap ? '6' : '5';
-    drawHeader(mPage, `${mSec}. Producto turístico y mercado`, fontBold, currentPageNum++, totalPages);
-    drawFooter(mPage, fontReg);
-    let my2 = MT - 10;
-    my2 = sectionTitle(mPage, `${mSec}. PRODUCTO TURÍSTICO Y MERCADO`, my2, fontBold);
+  cursor = startSection(sectionLabels[sectionIndex++]);
+  cursor = drawInfoBox(cursor, analysis.methodology.title, analysis.methodology.paragraphs, fonts, newPage);
+  subTitle(cursor, 'Hallazgos clave cuantificados', fonts);
+  cursor = drawBulletList(cursor, analysis.hallazgos.slice(0, 8), fonts, newPage);
 
-    const pm = stats.productoMercado;
-    if (pm) {
-      if (pm.topSegmentos?.length) {
-        my2 = subTitle(mPage, `Gráfico ${mSec}.1 — Segmentos de mercado atendidos (n=${stats.total})`, my2, fontBold);
-        const maxS = pm.topSegmentos[0]?.value ?? 1;
-        pm.topSegmentos.forEach((s: any) => { my2 = miniBar(mPage, s.name, s.value, maxS, my2, fontBold, fontReg); });
-        my2 -= 6;
-      }
-      if (pm.topIdiomas?.length) {
-        my2 = subTitle(mPage, `Gráfico ${mSec}.2 — Idiomas disponibles (n=${stats.total})`, my2, fontBold);
-        const maxI = pm.topIdiomas[0]?.value ?? 1;
-        pm.topIdiomas.forEach((s: any) => { my2 = miniBar(mPage, s.name, s.value, maxI, my2, fontBold, fontReg); });
-        my2 -= 6;
-      }
-      if (pm.capacidadDiariaTotal > 0) {
-        my2 = subTitle(mPage, 'Capacidad operacional del ecosistema', my2, fontBold);
-        mPage.drawText(`Capacidad total de atención diaria: ${pm.capacidadDiariaTotal} personas/día`, { x: ML, y: my2, size: 9, font: fontReg, color: DARK });
-        my2 -= 14;
-        mPage.drawText(`Capacidad máxima simultánea de visitantes: ${pm.capacidadVisitantesTotal} personas`, { x: ML, y: my2, size: 9, font: fontReg, color: DARK });
-        my2 -= 14;
-      }
-      if (pm.topCertificaciones?.length) {
-        my2 -= 4;
-        my2 = subTitle(mPage, `Tabla ${mSec}.3 — Certificaciones y sellos de calidad (n=${stats.total})`, my2, fontBold);
-        const maxC = pm.topCertificaciones[0]?.value ?? 1;
-        pm.topCertificaciones.forEach((s: any) => { my2 = miniBar(mPage, s.name, s.value, maxC, my2, fontBold, fontReg); });
-      }
-      if (stats.topCanales?.length) {
-        my2 -= 4;
-        my2 = subTitle(mPage, `Gráfico ${mSec}.4 — Canales digitales activos (n=${stats.total})`, my2, fontBold);
-        const maxCh = stats.topCanales[0]?.value ?? 1;
-        stats.topCanales.forEach((s: any) => { my2 = miniBar(mPage, s.name, s.value, maxCh, my2, fontBold, fontReg); });
-      }
+  cursor = startSection(sectionLabels[sectionIndex++]);
+  analysis.narratives.geography.forEach((paragraph) => {
+    const result = drawJustifiedParagraph(cursor.page, paragraph, { x: ML, y: cursor.y, width: MR - ML, size: 9, font: fonts.regular, lineHeight: 13, color: DARK, onPageBreak: () => { cursor = newPage(cursor.title); return { page: cursor.page, y: cursor.y }; } });
+    cursor.page = result.page;
+    cursor.y = result.y;
+  });
+  cursor.y -= 4;
+  if ((stats.avanceBarrio?.length ?? 0) > 0) {
+    subTitle(cursor, 'Tabla de avance por barrio', fonts);
+    cursor = drawTableHeader(cursor, [
+      { label: 'Barrio', x: ML, width: 150, value: (row: any) => row.nombre },
+      { label: 'Encuestas', x: ML + 165, width: 60, value: (row: any) => String(row.cantidad), align: 'center' },
+      { label: '% total', x: ML + 240, width: 55, value: (row: any) => `${row.pctTotal}%`, align: 'center' },
+      { label: 'Madurez', x: ML + 305, width: 70, value: (row: any) => `${analysis.maturity.byBarrio.find((item) => item.barrio === row.nombre)?.score ?? 0}`, align: 'center' },
+      { label: '% RNT', x: ML + 385, width: 55, value: (row: any) => row.pctRNT !== undefined ? `${row.pctRNT}%` : '—', align: 'center' },
+      { label: '% Reg. M.', x: ML + 448, width: 66, value: (row: any) => row.pctRegistroMercantil !== undefined ? `${row.pctRegistroMercantil}%` : '—', align: 'center' },
+    ], fonts, newPage);
+    cursor = drawTableRows(cursor, stats.avanceBarrio ?? [], [
+      { label: 'Barrio', x: ML, width: 150, value: (row: any) => row.nombre },
+      { label: 'Encuestas', x: ML + 165, width: 60, value: (row: any) => String(row.cantidad), align: 'center' },
+      { label: '% total', x: ML + 240, width: 55, value: (row: any) => `${row.pctTotal}%`, align: 'center' },
+      { label: 'Madurez', x: ML + 305, width: 70, value: (row: any) => `${analysis.maturity.byBarrio.find((item) => item.barrio === row.nombre)?.score ?? 0}`, align: 'center' },
+      { label: '% RNT', x: ML + 385, width: 55, value: (row: any) => row.pctRNT !== undefined ? `${row.pctRNT}%` : '—', align: 'center' },
+      { label: '% Reg. M.', x: ML + 448, width: 66, value: (row: any) => row.pctRegistroMercantil !== undefined ? `${row.pctRegistroMercantil}%` : '—', align: 'center' },
+    ], fonts, newPage);
+  }
+  if ((stats.byUpz?.length ?? 0) > 0) {
+    cursor.y -= 8;
+    subTitle(cursor, 'Distribución por UPZ', fonts);
+    cursor = drawTableHeader(cursor, [
+      { label: 'UPZ', x: ML, width: 240, value: (row: any) => row.name },
+      { label: 'Encuestas', x: ML + 255, width: 90, value: (row: any) => String(row.value), align: 'center' },
+      { label: '% del total', x: ML + 360, width: 90, value: (row: any) => `${Math.round((row.value / Math.max(stats.total || 1, 1)) * 100)}%`, align: 'center' },
+    ], fonts, newPage);
+    cursor = drawTableRows(cursor, stats.byUpz ?? [], [
+      { label: 'UPZ', x: ML, width: 240, value: (row: any) => row.name },
+      { label: 'Encuestas', x: ML + 255, width: 90, value: (row: any) => String(row.value), align: 'center' },
+      { label: '% del total', x: ML + 360, width: 90, value: (row: any) => `${Math.round((row.value / Math.max(stats.total || 1, 1)) * 100)}%`, align: 'center' },
+    ], fonts, newPage);
+  }
+
+  cursor = startSection(sectionLabels[sectionIndex++]);
+  analysis.narratives.formalization.forEach((paragraph) => {
+    const result = drawJustifiedParagraph(cursor.page, paragraph, { x: ML, y: cursor.y, width: MR - ML, size: 9, font: fonts.regular, lineHeight: 13, color: DARK, onPageBreak: () => { cursor = newPage(cursor.title); return { page: cursor.page, y: cursor.y }; } });
+    cursor.page = result.page;
+    cursor.y = result.y;
+  });
+  cursor.y -= 4;
+  subTitle(cursor, 'Indicadores de formalización', fonts);
+  const formal = stats.formalizacion;
+  if (formal) {
+    for (const row of [
+      ['Registro Mercantil / Cámara de Comercio', formal.pctRegistroMercantil],
+      ['Registro Nacional de Turismo (RNT)', formal.pctRNT],
+      ['RUT', formal.pctRUT],
+      ['Facturación electrónica', formal.pctFacturacionElectronica],
+      ['Afiliación a seguridad social', formal.pctAfiliacionSS ?? 0],
+      ['Seguro de responsabilidad civil', formal.pctSeguro ?? 0],
+    ] as Array<[string, number]>) cursor = drawPctBar(cursor, row[0], row[1], fonts, newPage);
+  }
+  cursor.y -= 6;
+  analysis.narratives.infrastructure.forEach((paragraph) => {
+    const result = drawJustifiedParagraph(cursor.page, paragraph, { x: ML, y: cursor.y, width: MR - ML, size: 9, font: fonts.regular, lineHeight: 13, color: DARK, onPageBreak: () => { cursor = newPage(cursor.title); return { page: cursor.page, y: cursor.y }; } });
+    cursor.page = result.page;
+    cursor.y = result.y;
+  });
+  cursor.y -= 4;
+  subTitle(cursor, 'Indicadores de infraestructura', fonts);
+  const infra = stats.infraestructura;
+  if (infra) {
+    for (const row of [
+      ['Sede física', infra.pctSedeFisica],
+      ['Señalización visible', infra.pctSeñalizacion],
+      ['Baños disponibles', infra.pctBanos],
+      ['Botiquín / emergencias', infra.pctBotiquin],
+      ['Conectividad a internet', infra.pctConectividad],
+    ] as Array<[string, number]>) cursor = drawPctBar(cursor, row[0], row[1], fonts, newPage);
+  }
+
+  cursor = startSection(sectionLabels[sectionIndex++]);
+  analysis.narratives.employment.forEach((paragraph) => {
+    const result = drawJustifiedParagraph(cursor.page, paragraph, { x: ML, y: cursor.y, width: MR - ML, size: 9, font: fonts.regular, lineHeight: 13, color: DARK, onPageBreak: () => { cursor = newPage(cursor.title); return { page: cursor.page, y: cursor.y }; } });
+    cursor.page = result.page;
+    cursor.y = result.y;
+  });
+  cursor.y -= 4;
+  const empleo = stats.empleo;
+  if (empleo) {
+    subTitle(cursor, 'Indicadores agregados de empleo', fonts);
+    cursor = drawTableHeader(cursor, [
+      { label: 'Indicador', x: ML, width: 280, value: (row: any) => row.label },
+      { label: 'Total', x: ML + 320, width: 60, value: (row: any) => String(row.value), align: 'center' },
+    ], fonts, newPage);
+    cursor = drawTableRows(cursor, [
+      { label: 'Empleos formales', value: empleo.totalFormales },
+      { label: 'Empleos informales / familiares', value: empleo.totalInformales },
+      { label: 'Mujeres vinculadas', value: empleo.totalMujeres },
+      { label: 'Jóvenes vinculados', value: empleo.totalJovenes },
+      { label: 'Adultos mayores (60+)', value: empleo.totalMayores60 },
+      { label: 'Población diversa', value: empleo.totalDiversidad },
+    ], [
+      { label: 'Indicador', x: ML, width: 280, value: (row: any) => row.label },
+      { label: 'Total', x: ML + 320, width: 60, value: (row: any) => String(row.value), align: 'center' },
+    ], fonts, newPage);
+  }
+  cursor.y -= 8;
+  cursor = drawInfoBox(cursor, 'Indice sintetico de madurez', [analysis.maturity.paragraph, analysis.maturity.formula], fonts, newPage);
+  subTitle(cursor, 'Componentes del indice', fonts);
+  analysis.maturity.components.forEach((component) => {
+    cursor = drawPctBar(cursor, `${component.label} (peso ${component.weight}%)`, Math.round(component.score), fonts, newPage);
+  });
+  if (analysis.maturity.byBarrio.length) {
+    cursor.y -= 6;
+    subTitle(cursor, 'Madurez aproximada por barrio', fonts);
+    cursor = drawTableHeader(cursor, [
+      { label: 'Barrio', x: ML, width: 220, value: (row: any) => row.barrio },
+      { label: 'Score', x: ML + 260, width: 55, value: (row: any) => String(row.score), align: 'center' },
+      { label: 'Nivel', x: ML + 340, width: 70, value: (row: any) => row.level, align: 'center' },
+    ], fonts, newPage);
+    cursor = drawTableRows(cursor, analysis.maturity.byBarrio.slice(0, 10), [
+      { label: 'Barrio', x: ML, width: 220, value: (row: any) => row.barrio },
+      { label: 'Score', x: ML + 260, width: 55, value: (row: any) => String(row.score), align: 'center' },
+      { label: 'Nivel', x: ML + 340, width: 70, value: (row: any) => row.level, align: 'center' },
+    ], fonts, newPage);
+  }
+
+  cursor = startSection(sectionLabels[sectionIndex++]);
+  [...analysis.narratives.market, ...analysis.narratives.sustainability, ...analysis.narratives.capacities].forEach((paragraph) => {
+    const result = drawJustifiedParagraph(cursor.page, paragraph, { x: ML, y: cursor.y, width: MR - ML, size: 9, font: fonts.regular, lineHeight: 13, color: DARK, onPageBreak: () => { cursor = newPage(cursor.title); return { page: cursor.page, y: cursor.y }; } });
+    cursor.page = result.page;
+    cursor.y = result.y;
+  });
+  const segmentList = stats.productoMercado?.topSegmentos ?? [];
+  if (segmentList.length) {
+    cursor.y -= 6;
+    subTitle(cursor, 'Segmentos de mercado atendidos', fonts);
+    const maxValue = Math.max(...segmentList.map((item) => item.value), 1);
+    segmentList.slice(0, 8).forEach((item) => { cursor = drawMiniBar(cursor, item.name, item.value, maxValue, fonts, newPage); });
+  }
+  const channelList = stats.topCanales ?? [];
+  if (channelList.length) {
+    cursor.y -= 6;
+    subTitle(cursor, 'Canales digitales activos', fonts);
+    const maxValue = Math.max(...channelList.map((item) => item.value), 1);
+    channelList.slice(0, 8).forEach((item) => { cursor = drawMiniBar(cursor, item.name, item.value, maxValue, fonts, newPage); });
+  }
+  const sustainabilityList = stats.topPracticasSostenibilidad ?? [];
+  if (sustainabilityList.length) {
+    cursor.y -= 6;
+    subTitle(cursor, 'Prácticas de sostenibilidad reportadas', fonts);
+    const maxValue = Math.max(...sustainabilityList.map((item) => item.value), 1);
+    sustainabilityList.slice(0, 8).forEach((item) => { cursor = drawMiniBar(cursor, item.name, item.value, maxValue, fonts, newPage); });
+  }
+
+  if ((stats.byFecha?.length ?? 0) > 0 || (stats.topEncuestadores?.length ?? 0) > 0 || (stats.completitudDist?.length ?? 0) > 0) {
+    cursor = startSection(sectionLabels[sectionIndex++]);
+    cursor = drawInfoBox(cursor, 'Calidad y trazabilidad de recolección', [
+      `Periodo observado: ${stats.fechaInicio || 'N/D'} - ${stats.fechaFin || 'N/D'}.`,
+      `La tasa de completitud calculada es ${stats.tasaCompletitud ?? 0}%.`,
+    ], fonts, newPage);
+    if ((stats.topEncuestadores?.length ?? 0) > 0) {
+      subTitle(cursor, 'Encuestas por encuestador/a', fonts);
+      cursor = drawTableHeader(cursor, [
+        { label: 'Encuestador/a', x: ML, width: 240, value: (row: any) => row.name },
+        { label: 'Encuestas', x: ML + 260, width: 70, value: (row: any) => String(row.value), align: 'center' },
+        { label: '% del total', x: ML + 350, width: 80, value: (row: any) => `${Math.round((row.value / Math.max(stats.total || 1, 1)) * 100)}%`, align: 'center' },
+      ], fonts, newPage);
+      cursor = drawTableRows(cursor, stats.topEncuestadores ?? [], [
+        { label: 'Encuestador/a', x: ML, width: 240, value: (row: any) => row.name },
+        { label: 'Encuestas', x: ML + 260, width: 70, value: (row: any) => String(row.value), align: 'center' },
+        { label: '% del total', x: ML + 350, width: 80, value: (row: any) => `${Math.round((row.value / Math.max(stats.total || 1, 1)) * 100)}%`, align: 'center' },
+      ], fonts, newPage);
+      cursor.y -= 8;
+    }
+    if ((stats.byFecha?.length ?? 0) > 0) {
+      subTitle(cursor, 'Serie diaria de recolección', fonts);
+      const maxValue = Math.max(...(stats.byFecha ?? []).map((item) => item.value), 1);
+      (stats.byFecha ?? []).forEach((item) => { cursor = drawMiniBar(cursor, item.fecha, item.value, maxValue, fonts, newPage); });
+    }
+    if ((stats.completitudDist?.length ?? 0) > 0) {
+      cursor.y -= 8;
+      subTitle(cursor, 'Estados de completitud', fonts);
+      cursor = drawTableHeader(cursor, [
+        { label: 'Estado', x: ML, width: 260, value: (row: any) => row.name },
+        { label: 'Registros', x: ML + 280, width: 70, value: (row: any) => String(row.value), align: 'center' },
+        { label: '% del total', x: ML + 370, width: 80, value: (row: any) => `${Math.round((row.value / Math.max(stats.total || 1, 1)) * 100)}%`, align: 'center' },
+      ], fonts, newPage);
+      cursor = drawTableRows(cursor, stats.completitudDist ?? [], [
+        { label: 'Estado', x: ML, width: 260, value: (row: any) => row.name },
+        { label: 'Registros', x: ML + 280, width: 70, value: (row: any) => String(row.value), align: 'center' },
+        { label: '% del total', x: ML + 370, width: 80, value: (row: any) => `${Math.round((row.value / Math.max(stats.total || 1, 1)) * 100)}%`, align: 'center' },
+      ], fonts, newPage);
     }
   }
 
-  // ─── PAGE: Recolección / encuestadores / fechas ───────────────────────────
-  if (hasEncuestadores || hasFecha) {
-    const rPage = pdfDoc.addPage([PW, PH]);
-    const rSec = hasMap ? '7' : '6';
-    drawHeader(rPage, `${rSec}. Recolección y encuestadores`, fontBold, currentPageNum++, totalPages);
-    drawFooter(rPage, fontReg);
-    let ry = MT - 10;
-    ry = sectionTitle(rPage, `${rSec}. RECOLECCIÓN DE DATOS Y ENCUESTADORES`, ry, fontBold);
+  cursor = startSection(sectionLabels[sectionIndex++]);
+  subTitle(cursor, 'Brechas y riesgos principales', fonts);
+  cursor = drawBulletList(cursor, analysis.brechasYRiesgos, fonts, newPage);
+  cursor.y -= 6;
+  subTitle(cursor, 'Recomendaciones priorizadas', fonts);
+  cursor = drawTableHeader(cursor, [
+    { label: 'Acción', x: ML, width: 270, value: (row: any) => row.action },
+    { label: 'Prioridad', x: ML + 286, width: 60, value: (row: any) => row.priority, align: 'center' },
+    { label: 'Indicador sugerido', x: ML + 360, width: 150, value: (row: any) => row.indicator },
+  ], fonts, newPage);
+  cursor = drawTableRows(cursor, analysis.recommendations, [
+    { label: 'Acción', x: ML, width: 270, value: (row: any) => row.action },
+    { label: 'Prioridad', x: ML + 286, width: 60, value: (row: any) => row.priority, align: 'center' },
+    { label: 'Indicador sugerido', x: ML + 360, width: 150, value: (row: any) => row.indicator },
+  ], fonts, newPage);
 
-    if (hasEncuestadores) {
-      ry = subTitle(rPage, `Tabla ${rSec}.1 — Encuestas por encuestador/a (n=${stats.total})`, ry, fontBold);
-      ry = tableHeader(rPage, [{label:'Encuestador/a',x:ML},{label:'Encuestas',x:ML+300},{label:'% del total',x:ML+380}], ry, fontBold);
-      (stats.topEncuestadores ?? []).forEach((e: any, i: number) => {
-        if (ry < MB + 20) return;
-        ry = tableRow(rPage, [
-          { val: e.name, x: ML },
-          { val: String(e.value), x: ML + 308 },
-          { val: `${Math.round(e.value / (stats.total || 1) * 100)}%`, x: ML + 383 },
-        ], ry, i % 2 === 0, fontReg);
-      });
-      ry -= 10;
-    }
+  cursor = startSection(sectionLabels[sectionIndex++]);
+  subTitle(cursor, 'Ficha técnica resumida', fonts);
+  cursor = drawTableHeader(cursor, [
+    { label: 'Campo', x: ML, width: 180, value: (row: any) => row.label },
+    { label: 'Valor', x: ML + 200, width: 280, value: (row: any) => row.value },
+  ], fonts, newPage);
+  cursor = drawTableRows(cursor, analysis.methodology.technicalSheet, [
+    { label: 'Campo', x: ML, width: 180, value: (row: any) => row.label },
+    { label: 'Valor', x: ML + 200, width: 280, value: (row: any) => row.value },
+  ], fonts, newPage);
+  cursor.y -= 8;
+  subTitle(cursor, 'Glosario', fonts);
+  analysis.glossary.forEach((entry) => {
+    cursor = ensureSpace(cursor, 32, newPage);
+    drawText(cursor.page, `${entry.term}:`, { x: ML, y: cursor.y, size: 9, font: fonts.bold, color: FOREST });
+    const result = drawJustifiedParagraph(cursor.page, entry.definition, { x: ML + 54, y: cursor.y, width: MR - ML - 54, size: 8.5, font: fonts.regular, lineHeight: 12, color: DARK, onPageBreak: () => { cursor = newPage(cursor.title); return { page: cursor.page, y: cursor.y }; } });
+    cursor.page = result.page;
+    cursor.y = result.y;
+  });
 
-    if (hasFecha) {
-      ry = subTitle(rPage, `Gráfico ${rSec}.2 — Evolución diaria de recolección (n=${stats.total})`, ry, fontBold);
-      rPage.drawText(`Período: ${stats.fechaInicio || 'N/D'} – ${stats.fechaFin || 'N/D'}`, { x: ML, y: ry, size: 8.5, font: fontReg, color: MID });
-      ry -= 14;
-      // Simple sparkline
-      const series: Array<{fecha:string;value:number}> = stats.byFecha ?? [];
-      if (series.length > 1) {
-        const maxV = Math.max(...series.map((s: any) => s.value), 1);
-        const totalW = MR - ML;
-        const barW = Math.max(3, Math.floor(totalW / series.length) - 1);
-        const chartH = 80;
-        rPage.drawRectangle({ x: ML, y: ry - chartH, width: totalW, height: chartH, color: LIGHT });
-        series.forEach((s: any, i: number) => {
-          const bh = Math.max(2, Math.round((s.value / maxV) * (chartH - 4)));
-          rPage.drawRectangle({ x: ML + i * (barW + 1), y: ry - chartH + 2, width: barW, height: bh, color: GREEN });
-        });
-        ry -= chartH + 6;
-        if (series.length > 0) {
-          rPage.drawText(series[0].fecha, { x: ML, y: ry, size: 7, font: fontReg, color: MID });
-          rPage.drawText(series[series.length - 1].fecha, { x: MR - 60, y: ry, size: 7, font: fontReg, color: MID });
-        }
-        ry -= 14;
-      }
-    }
+  cursor = startSection(sectionLabels[sectionIndex++]);
+  cursor = drawInfoBox(cursor, 'Créditos y estado de la galería', [
+    'La carpeta public/images/santafe/ queda documentada para alojar únicamente imágenes de dominio público o con licencia libre. En esta copia local no fue posible descargar los binarios desde Wikimedia Commons, por lo que el PDF y la web muestran placeholders sin interrumpir la generación del informe.',
+    'Revise public/images/santafe/CREDITS.md antes de incorporar archivos finales y complete autor, URL del archivo y licencia específica de cada fotografía seleccionada.',
+  ], fonts, newPage);
+  cursor = drawTableHeader(cursor, [
+    { label: 'Tema', x: ML, width: 120, value: (row: any) => row.title },
+    { label: 'Fuente', x: ML + 135, width: 200, value: (row: any) => row.source },
+    { label: 'Licencia', x: ML + 350, width: 150, value: (row: any) => row.license },
+  ], fonts, newPage);
+  cursor = drawTableRows(cursor, santafeImages, [
+    { label: 'Tema', x: ML, width: 120, value: (row: any) => row.title },
+    { label: 'Fuente', x: ML + 135, width: 200, value: (row: any) => row.source },
+    { label: 'Licencia', x: ML + 350, width: 150, value: (row: any) => row.license },
+  ], fonts, newPage);
 
-    if (stats.completitudDist?.length) {
-      ry -= 4;
-      ry = subTitle(rPage, `Tabla ${rSec}.3 — Estado de completitud de registros (tasa: ${stats.tasaCompletitud}%)`, ry, fontBold);
-      ry = tableHeader(rPage, [{label:'Estado',x:ML},{label:'Registros',x:ML+280},{label:'% del total',x:ML+360}], ry, fontBold);
-      (stats.completitudDist ?? []).forEach((c: any, i: number) => {
-        if (ry < MB + 20) return;
-        ry = tableRow(rPage, [
-          { val: c.name, x: ML },
-          { val: String(c.value), x: ML + 288 },
-          { val: `${Math.round(c.value / (stats.total || 1) * 100)}%`, x: ML + 363 },
-        ], ry, i % 2 === 0, fontReg);
-      });
-    }
-  }
+  const totalPages = pdfDoc.getPageCount();
+  const pages = pdfDoc.getPages();
+  pages.forEach((page, index) => {
+    if (index <= 1) return;
+    drawHeader(page, pageTitles.get(page) || 'Informe', fonts, index + 1, totalPages);
+    drawFooter(page, fonts);
+  });
 
-  // ─── PAGE: Scores + Necesidades + Sostenibilidad ──────────────────────────
-  const sPage = pdfDoc.addPage([PW, PH]);
-  const sSec = hasMap ? '8' : '7';
-  drawHeader(sPage, `${sSec}. Capacidades y necesidades`, fontBold, currentPageNum++, totalPages);
-  drawFooter(sPage, fontReg);
-  let sy = MT - 10;
-  sy = sectionTitle(sPage, `${sSec}. CAPACIDADES, NECESIDADES Y SOSTENIBILIDAD`, sy, fontBold);
-
-  if (scores.length) {
-    sy = subTitle(sPage, `Tabla ${sSec}.1 — Scores de fortalecimiento por dimensión (escala 1–5, n=${stats.total})`, sy, fontBold);
-    sy = tableHeader(sPage, [{label:'Dimensión',x:ML},{label:'Score prom.',x:ML+290},{label:'Interpretación',x:ML+370}], sy, fontBold);
-    scores.forEach((sc: any, i: number) => {
-      const interp = sc.value >= 4 ? 'Fortaleza' : sc.value >= 3 ? 'En desarrollo' : sc.value >= 2 ? 'Brecha media' : 'Brecha crítica';
-      sy = tableRow(sPage, [
-        { val: sc.name, x: ML },
-        { val: String(sc.value), x: ML + 300 },
-        { val: interp, x: ML + 373 },
-      ], sy, i % 2 === 0, fontReg);
-    });
-    sy -= 6;
-    sPage.drawText('Nota: Escala 1–5 obtenida de los campos de autoevaluación de cada emprendimiento.', { x: ML, y: sy, size: 7.5, font: fontReg, color: MID });
-    sy -= 20;
-  }
-
-  const nec: Array<{name:string;value:number}> = stats.necesidades ?? [];
-  if (nec.length) {
-    sy = subTitle(sPage, `Gráfico ${sSec}.2 — Áreas donde se requiere mayor apoyo (n=${stats.total})`, sy, fontBold);
-    const maxN = nec[0]?.value ?? 1;
-    nec.slice(0, 10).forEach((n: any) => { sy = miniBar(sPage, n.name, n.value, maxN, sy, fontBold, fontReg); });
-    sy -= 10;
-  }
-
-  const sost: Array<{name:string;value:number}> = stats.topPracticasSostenibilidad ?? [];
-  if (sost.length && sy > MB + 60) {
-    sy = subTitle(sPage, `Gráfico ${sSec}.3 — Prácticas de sostenibilidad implementadas (n=${stats.total})`, sy, fontBold);
-    const maxSt = sost[0]?.value ?? 1;
-    sost.slice(0, 6).forEach((s: any) => { sy = miniBar(sPage, s.name, s.value, maxSt, sy, fontBold, fontReg); });
-  }
+  drawHeader(tocPage, 'Tabla de contenido', fonts, 2, totalPages);
+  drawFooter(tocPage, fonts);
+  let y = MT - 10;
+  drawText(tocPage, 'Tabla de contenido', { x: ML, y, size: 16, font: fonts.bold, color: FOREST });
+  y -= 8;
+  tocPage.drawRectangle({ x: ML, y, width: MR - ML, height: 2, color: LIME });
+  y -= 20;
+  tocItems.forEach((item, index) => {
+    if (y < MB + 24) return;
+    tocPage.drawRectangle({ x: ML - 4, y: y - 5, width: MR - ML + 8, height: 22, color: index % 2 === 0 ? STRIP : WHITE });
+    drawText(tocPage, item.label, { x: ML + 4, y: y + 3, size: 10, font: fonts.bold, color: FOREST });
+    drawText(tocPage, '.'.repeat(Math.max(4, 92 - item.label.length)), { x: ML + 4 + item.label.length * 5.1, y: y + 3, size: 9, font: fonts.regular, color: rgb(0.7, 0.7, 0.7) });
+    drawText(tocPage, String(item.pageNumber), { x: MR - 16, y: y + 3, size: 10, font: fonts.bold, color: FOREST });
+    y -= 26;
+  });
 
   const pdfBytes = await pdfDoc.save();
   return new Response(Buffer.from(pdfBytes), {
