@@ -1,7 +1,7 @@
 import { centroidForBarrio } from './geo';
 export type RawRecord = Record<string, any>;
 export type SurveyRecord = {
-  id: string; fecha: string; upz: string; barrio: string; zona: string; tipo: string;
+  id: string; fecha: string; encuestador: string; upz: string; barrio: string; zona: string; tipo: string;
   nombre: string; estado: string; lat: number; lng: number;
   geoPrecision: 'exacto' | 'estimado' | 'sin dato';
   quiereRuta: boolean; necesidades: string[]; herramientas: string[]; scores: Record<string, number>;
@@ -61,6 +61,7 @@ export function normaliseRecord(r: RawRecord, idx: number): SurveyRecord {
 
   return {
     id: String(idx + 1), fecha: clean(r['Fecha de aplicación'] || r['Marca temporal']),
+    encuestador: clean(r['Nombre del encuestador/a']),
     upz, barrio, zona: clean(r['Zona turística asociada']),
     tipo: clean(r['Tipo principal de emprendimiento']),
     nombre: clean(r['Nombre comercial'] || r['Nombre del emprendimiento']),
@@ -210,6 +211,37 @@ export function buildStats(records: SurveyRecord[]) {
   const atractivos = top(count(records.map(r => r.atractivosCercanos).filter(Boolean)), 6);
   const articulacion = top(count(records.map(r => r.propuestaArticulacion).filter(Boolean)), 6);
 
+  // encuestadores
+  const topEncuestadores = top(count(records.map(r => r.encuestador).filter(Boolean)), 10);
+
+  // completitud
+  const completitudDist = top(count(records.map(r => r.estado).filter(Boolean)), 6);
+  const completosN = records.filter(r => /completo|completa/i.test(r.estado)).length;
+  const tasaCompletitud = pct(completosN);
+
+  // series temporales diarias
+  const byFecha: Array<{ fecha: string; value: number }> = (() => {
+    const raw: Record<string, number> = {};
+    for (const r of records) {
+      if (!r.fecha) continue;
+      // Accept DD/MM/YYYY, YYYY-MM-DD, MM/DD/YYYY or just keep first 10 chars
+      let key = r.fecha.trim().slice(0, 10);
+      // Try to normalise to YYYY-MM-DD for sorting
+      const ddmm = key.match(/^(\d{1,2})[/\-](\d{1,2})[/\-](\d{2,4})$/);
+      if (ddmm) {
+        const [, d, m, y] = ddmm;
+        const year = y.length === 2 ? `20${y}` : y;
+        key = `${year}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`;
+      }
+      if (key) raw[key] = (raw[key] || 0) + 1;
+    }
+    return Object.entries(raw).sort((a, b) => a[0].localeCompare(b[0])).map(([fecha, value]) => ({ fecha, value }));
+  })();
+
+  // fechas de inicio y fin del periodo
+  const fechaInicio = byFecha.length ? byFecha[0].fecha : '';
+  const fechaFin = byFecha.length ? byFecha[byFecha.length - 1].fecha : '';
+
   // avance por barrio para el PDF/análisis territorial
   const avanceBarrio = Object.entries(byBarrio).sort((a, b) => b[1] - a[1]).map(([nombre, cantidad]) => {
     const barrioRecs = records.filter(r => r.barrio === nombre);
@@ -247,6 +279,12 @@ export function buildStats(records: SurveyRecord[]) {
     atractivos,
     articulacion,
     avanceBarrio,
+    topEncuestadores,
+    completitudDist,
+    tasaCompletitud,
+    byFecha,
+    fechaInicio,
+    fechaFin,
   };
 }
 
