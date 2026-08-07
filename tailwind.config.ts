@@ -1,2 +1,27 @@
 import type { Config } from 'tailwindcss';
-export default { content: ['./app/**/*.{js,ts,jsx,tsx}', './components/**/*.{js,ts,jsx,tsx}'], theme: { extend: { colors: { fundesco: { forest:'#10483D', green:'#178C72', lime:'#B5D334', gold:'#F2B705', cream:'#F7F2E8', ink:'#17231F' } } } }, plugins: [] } satisfies Config;
+import { colorHex } from './lib/designTokens';
+
+export default {
+  content: ['./app/**/*.{js,ts,jsx,tsx}', './components/**/*.{js,ts,jsx,tsx}'],
+  theme: {
+    extend: {
+      colors: {
+        fundesco: {
+          forest: colorHex.forest,
+          green: colorHex.green,
+          lime: colorHex.lime,
+          cream: colorHex.cream,
+          ink: colorHex.ink,
+          slate: colorHex.slate,
+          muted: colorHex.muted,
+          line: colorHex.line,
+          mist: colorHex.mist,
+        },
+      },
+      fontFamily: {
+        sans: ['var(--font-sans)', 'Arial', 'sans-serif'],
+      },
+    },
+  },
+  plugins: [],
+} satisfies Config;
