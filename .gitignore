@@ -41,3 +41,6 @@ dist/
 
 # Jupyter Notebooks
 .ipynb_checkpoints/
+
+# TypeScript
+*.tsbuildinfo

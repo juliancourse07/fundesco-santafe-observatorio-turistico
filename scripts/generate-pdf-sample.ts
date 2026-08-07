@@ -9,7 +9,7 @@ async function main() {
   const summaryPath = path.join(repoRoot, 'data-current-summary.json');
   const outputDir = path.join(repoRoot, 'docs', 'samples');
   const outputPdf = path.join(outputDir, 'informe-fundesco-santa-fe.pdf');
-  const outputLog = path.join(outputDir, 'pdf-generation.log');
+  const outputLog = path.join(outputDir, 'pdf-generation.txt');
 
   const raw = JSON.parse(await fs.readFile(summaryPath, 'utf8'));
   const stats = sampleStatsFromCurrentSummary(raw);
