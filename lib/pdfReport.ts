@@ -800,12 +800,666 @@ async function drawMapBox(pdfDoc: PDFDocument, cursor: Cursor, stats: StatsInput
   return cursor;
 }
 
+// ─── Badge helpers for Informe 2 ─────────────────────────────────────────────
+// Distinguishes three types of content within Informe 2:
+//   [D] Dato derivado de la encuesta
+//   [M] Criterio metodológico propuesto
+//   [P] Pendiente de levantamiento en campo
+function drawBadge(cursor: Cursor, type: 'dato' | 'metodologico' | 'pendiente', fonts: Fonts) {
+  const configs = {
+    dato: { label: '[D] Dato derivado', color: GREEN },
+    metodologico: { label: '[M] Criterio metodológico', color: FOREST },
+    pendiente: { label: '[P] Pendiente de levantamiento', color: WARNING },
+  };
+  const cfg = configs[type];
+  const badgeW = fonts.bold.widthOfTextAtSize(cfg.label, 7.5) + 10;
+  cursor.page.drawRectangle({ x: PAGE_MARGIN_X, y: cursor.y - 2, width: badgeW, height: 12, color: cfg.color, borderColor: cfg.color, borderWidth: 0 });
+  drawText(cursor.page, cfg.label, { x: PAGE_MARGIN_X + 5, y: cursor.y + 1, size: 7.5, font: fonts.bold, color: PAPER });
+  cursor.y -= 18;
+  return cursor;
+}
+
+// ─── Cover for Informe 2 ─────────────────────────────────────────────────────
+function drawPotencialesCover(cover: PDFPage, fonts: Fonts, stats: StatsInput, updatedAt: string) {
+  const titleY = CONTENT_TOP;
+  drawText(cover, 'Observatorio Turístico de Santa Fe', { x: PAGE_MARGIN_X, y: titleY, size: typeScale.xl, font: fonts.bold, color: FOREST });
+  drawText(cover, 'Informe 2 — Potenciales turísticos, viabilidad y propuestas de ruta', { x: PAGE_MARGIN_X, y: titleY - 22, size: typeScale.sm, font: fonts.regular, color: SLATE });
+  drawText(cover, `Corte: ${updatedAt}`, { x: PAGE_MARGIN_X, y: titleY - 40, size: typeScale.xs, font: fonts.regular, color: MUTED });
+
+  const boxTop = titleY - 60;
+  const boxH = 120;
+  const boxBottom = boxTop - boxH;
+  cover.drawRectangle({ x: PAGE_MARGIN_X, y: boxBottom, width: CONTENT_W, height: boxH, color: PAPER, borderColor: LINE, borderWidth: 1.2 });
+  cover.drawRectangle({ x: PAGE_MARGIN_X, y: boxTop - 20, width: CONTENT_W, height: 20, color: GREEN });
+  drawText(cover, 'Alcance del informe', { x: PAGE_MARGIN_X + spacingScale.sm, y: boxTop - 15, size: 9.5, font: fonts.bold, color: PAPER });
+
+  [
+    ['Base de análisis', `${stats.total ?? 0} emprendimientos encuestados, Localidad de Santa Fe`],
+    ['Corte de datos', updatedAt],
+    ['Barrios con registro', String((stats.byBarrio ?? stats.avanceBarrio ?? []).length)],
+    ['Prácticas sostenibles documentadas', String((stats.topPracticasSostenibilidad ?? []).length)],
+  ].forEach(([label, value], index) => {
+    const y = boxTop - 38 - index * 18;
+    if (y > boxBottom + 4) {
+      drawText(cover, `${label}:`, { x: PAGE_MARGIN_X + spacingScale.sm, y, size: 9, font: fonts.bold, color: FOREST });
+      drawText(cover, value, { x: PAGE_MARGIN_X + 210, y, size: 9, font: fonts.regular, color: INK });
+    }
+  });
+
+  const noteY = boxBottom - 20;
+  drawText(cover, 'Este informe integra hallazgos derivados de datos, criterios metodológicos propuestos y campos pendientes de levantamiento en campo.', { x: PAGE_MARGIN_X, y: noteY, size: 8.5, font: fonts.regular, color: SLATE });
+  drawText(cover, 'Cada bloque de contenido lleva un indicador visual: [D] Dato derivado · [M] Criterio metodológico · [P] Pendiente de levantamiento.', { x: PAGE_MARGIN_X, y: noteY - 14, size: 8.5, font: fonts.regular, color: MUTED });
+}
+
+// ─── Informe 2 section renderers ─────────────────────────────────────────────
+
+function renderPotNotaLector(cursor: Cursor, fonts: Fonts, newPage: (title: string) => Cursor) {
+  cursor = drawInfoBox(cursor, 'Naturaleza del documento', [
+    'Este informe analiza el potencial turístico de la Localidad de Santa Fe a partir de los datos recolectados mediante encuestas a emprendimientos. No constituye un inventario de atractivos turísticos ni un censo de recursos patrimoniales.',
+    'Los datos disponibles provienen de las encuestas a emprendimientos registrados en el Observatorio. No existe en el repositorio un inventario de atractivos ni un censo de recursos patrimoniales; por tanto, ningún dato de este informe ha sido inventado.',
+  ], fonts, newPage);
+
+  cursor = subTitle(cursor, 'Sistema de marcas', fonts, newPage);
+  cursor = drawBadge(cursor, 'dato', fonts);
+  cursor = drawParagraph(cursor, 'Hallazgo cuantificado y trazable a una variable de la encuesta.', { size: 9, lineHeight: 13, font: fonts.regular, color: INK }, newPage);
+  cursor = drawBadge(cursor, 'metodologico', fonts);
+  cursor = drawParagraph(cursor, 'Criterio, marco o propuesta metodológica que no proviene directamente de la encuesta, sino de la interpretación técnica del equipo.', { size: 9, lineHeight: 13, font: fonts.regular, color: INK }, newPage);
+  cursor = drawBadge(cursor, 'pendiente', fonts);
+  cursor = drawParagraph(cursor, 'Campo no cubierto por la encuesta actual. Se presenta como plantilla estructurada para levantamiento en campo por parte del Observatorio.', { size: 9, lineHeight: 13, font: fonts.regular, color: INK }, newPage);
+
+  cursor = drawInfoBox(cursor, 'Restricción metodológica', [
+    'Está terminantemente prohibido inventar datos en este informe. Todo indicador es derivado de variables existentes o se presenta como plantilla vacía. La fuente de cada dato se indica en el Anexo metodológico (Sección 10).',
+  ], fonts, newPage);
+  return cursor;
+}
+
+function renderPotMarcoConceptual(cursor: Cursor, fonts: Fonts, newPage: (title: string) => Cursor) {
+  cursor = drawBadge(cursor, 'metodologico', fonts);
+  cursor = drawParagraph(cursor, 'El potencial turístico de un territorio se define como la capacidad de sus recursos, actores y condiciones estructurales para generar y sostener flujos turísticos de calidad (Ferrari, 2021; Menchero Sánchez, 2015). Esta capacidad no es inherente al recurso sino al sistema que lo articula: infraestructura, actores, gobernanza y demanda.', { size: 9.25, lineHeight: 13, font: fonts.regular, color: INK, justify: true, gapAfter: spacingScale.sm }, newPage);
+
+  cursor = drawParagraph(cursor, 'Para Santa Fe, el potencial turístico se evalúa a través de cuatro ejes de viabilidad que estructuran este informe:', { size: 9.25, lineHeight: 13, font: fonts.regular, color: INK, justify: true, gapAfter: spacingScale.sm }, newPage);
+
+  cursor = drawTable(cursor, [
+    { eje: 'Cultural', descripcion: 'Presencia de patrimonio tangible e intangible, expresiones artísticas, prácticas comunitarias y narrativas identitarias que pueden sostener experiencias turísticas con valor diferencial.', variable: 'tipo de actor, prácticas sostenibles, cuidado del patrimonio' },
+    { eje: 'Social', descripcion: 'Capacidad organizativa de la comunidad local, inclusión de poblaciones diversas, empleo generado y nivel de cohesión territorial para desarrollar turismo con equidad.', variable: 'empleo (mujeres, jóvenes, diversidad), nivel de formalización, interés en rutas' },
+    { eje: 'Económica', descripcion: 'Viabilidad financiera y de mercado de los emprendimientos, diversidad de segmentos atendidos, canales de comercialización y capacidad de absorción de visitantes.', variable: 'segmentos, canales, capacidad diaria, herramientas digitales' },
+    { eje: 'Ambiental', descripcion: 'Adopción de prácticas de sostenibilidad, gestión de residuos, uso eficiente de recursos y protección del entorno como condición de competitividad a largo plazo.', variable: 'prácticas de sostenibilidad, reducción de plásticos, separación de residuos' },
+  ], createColumns([
+    { label: 'Eje', width: 68, value: (row: any) => row.eje },
+    { label: 'Qué mide', width: 258, value: (row: any) => row.descripcion },
+    { label: 'Variables de encuesta', width: 142, value: (row: any) => row.variable },
+  ]), fonts, newPage);
+
+  cursor = subTitle(cursor, 'Referente documentado: Barrio Egipto (Santa Fe)', fonts, newPage);
+  cursor = drawBadge(cursor, 'metodologico', fonts);
+  cursor = drawParagraph(cursor, 'El barrio Egipto, en la Localidad de Santa Fe, constituye un referente académicamente documentado de turismo comunitario urbano viable. El proyecto Breaking Borders demostró que comunidades en contextos de alta vulnerabilidad pueden transformar el patrimonio cultural y la identidad barrial en experiencias turísticas sostenibles (Ferrari, 2021; Pontificia Universidad Javeriana, 2022; Universidad La Gran Colombia, 2017). Este caso no implica vínculo operativo entre el Observatorio y la iniciativa, sino que constituye evidencia de viabilidad del modelo en la propia localidad.', { size: 9.25, lineHeight: 13, font: fonts.regular, color: INK, justify: true, gapAfter: spacingScale.sm }, newPage);
+  return cursor;
+}
+
+function renderPotZonasPotencial(cursor: Cursor, stats: StatsInput, fonts: Fonts, newPage: (title: string) => Cursor) {
+  cursor = drawBadge(cursor, 'dato', fonts);
+  cursor = drawParagraph(cursor, 'A partir de la concentración territorial de encuestas, la composición por tipo de actor y las prácticas sostenibles registradas, es posible identificar zonas con mayor potencial turístico inferido. Se trata de potencial derivado de la oferta registrada, no de un inventario de atractivos turísticos.', { size: 9.25, lineHeight: 13, font: fonts.regular, color: INK, justify: true, gapAfter: spacingScale.sm }, newPage);
+
+  const avanceBarrio = stats.avanceBarrio ?? [];
+  const byBarrio = stats.byBarrio ?? [];
+
+  if (avanceBarrio.length > 0) {
+    cursor = subTitle(cursor, 'Tabla comparativa de potencial por barrio (datos derivados)', fonts, newPage);
+    cursor = drawBadge(cursor, 'dato', fonts);
+    cursor = drawTable(cursor, avanceBarrio.slice(0, 10), createColumns([
+      { label: 'Barrio', width: 130, value: (row: any) => row.nombre },
+      { label: 'Encuestas', width: 62, value: (row: any) => String(row.cantidad), align: 'center' },
+      { label: '% del total', width: 62, value: (row: any) => `${row.pctTotal}%`, align: 'center' },
+      { label: '% RNT', width: 60, value: (row: any) => row.pctRNT !== undefined ? `${row.pctRNT}%` : '—', align: 'center' },
+      { label: '% Reg. Merc.', width: 74, value: (row: any) => row.pctRegistroMercantil !== undefined ? `${row.pctRegistroMercantil}%` : '—', align: 'center' },
+      { label: 'Madurez', width: 80, value: (row: any) => row.scorePromedio !== undefined ? `${row.scorePromedio}/100` : '—', align: 'center' },
+    ]), fonts, newPage);
+    cursor = drawParagraph(cursor, 'Nota: la columna "% del total" refleja la participación relativa en el levantamiento. No equivale a la importancia turística absoluta del barrio.', { size: 8, lineHeight: 11, font: fonts.regular, color: MUTED, gapAfter: spacingScale.sm }, newPage);
+  } else if (byBarrio.length > 0) {
+    cursor = subTitle(cursor, 'Distribución por barrio (datos derivados)', fonts, newPage);
+    cursor = drawBadge(cursor, 'dato', fonts);
+    const maxV = Math.max(...byBarrio.map((item) => item.value), 1);
+    byBarrio.slice(0, 8).forEach((item) => { cursor = drawMiniBar(cursor, item.name, item.value, maxV, fonts, newPage); });
+  } else {
+    cursor = drawBadge(cursor, 'pendiente', fonts);
+    cursor = drawParagraph(cursor, 'No hay datos desagregados por barrio en este corte. Para completar esta sección, el Observatorio debe registrar el barrio en cada encuesta y agregar la variable al procesamiento.', { size: 9.25, lineHeight: 13, font: fonts.regular, color: INK, justify: true }, newPage);
+  }
+
+  cursor = subTitle(cursor, 'Composición por tipo de actor turístico', fonts, newPage);
+  const byTipo = stats.byTipo ?? [];
+  if (byTipo.length > 0) {
+    cursor = drawBadge(cursor, 'dato', fonts);
+    const maxV = Math.max(...byTipo.map((item) => item.value), 1);
+    byTipo.slice(0, 8).forEach((item) => { cursor = drawMiniBar(cursor, item.name, item.value, maxV, fonts, newPage); });
+  } else {
+    cursor = drawBadge(cursor, 'pendiente', fonts);
+    cursor = drawParagraph(cursor, 'Dato no disponible en este corte.', { size: 9.25, lineHeight: 13, font: fonts.regular, color: INK }, newPage);
+  }
+
+  cursor = subTitle(cursor, 'Prácticas sostenibles registradas (indicador de vocación ambiental)', fonts, newPage);
+  const sostenibilidad = stats.topPracticasSostenibilidad ?? [];
+  if (sostenibilidad.length > 0) {
+    cursor = drawBadge(cursor, 'dato', fonts);
+    const maxV = Math.max(...sostenibilidad.map((item) => item.value), 1);
+    sostenibilidad.slice(0, 8).forEach((item) => { cursor = drawMiniBar(cursor, item.name, item.value, maxV, fonts, newPage); });
+  } else {
+    cursor = drawBadge(cursor, 'pendiente', fonts);
+    cursor = drawParagraph(cursor, 'Dato no disponible en este corte.', { size: 9.25, lineHeight: 13, font: fonts.regular, color: INK }, newPage);
+  }
+  return cursor;
+}
+
+function renderPotMatrizViabilidad(cursor: Cursor, stats: StatsInput, fonts: Fonts, newPage: (title: string) => Cursor) {
+  cursor = drawBadge(cursor, 'metodologico', fonts);
+  cursor = drawParagraph(cursor, 'La matriz multicriterio aplica los cuatro ejes de viabilidad (cultural, social, económica y ambiental) a las zonas identificadas. Cada criterio se puntúa de 0 a 100 según la variable de encuesta que lo alimenta. Cuando el dato existe, se calcula; cuando no existe, la celda se marca como pendiente de levantamiento.', { size: 9.25, lineHeight: 13, font: fonts.regular, color: INK, justify: true, gapAfter: spacingScale.sm }, newPage);
+
+  cursor = subTitle(cursor, 'Criterios de puntuación por eje (definición operativa)', fonts, newPage);
+  cursor = drawBadge(cursor, 'metodologico', fonts);
+  cursor = drawTable(cursor, [
+    { eje: 'Cultural', criterio: 'Diversidad de tipos de actor turístico', formula: '(tipos distintos / 8 tipos posibles) × 100', variable: 'byTipo' },
+    { eje: 'Social', criterio: 'Nivel de inclusión laboral', formula: '(mujeres + jóvenes + diversidad) / total empleo × 100', variable: 'empleo.*' },
+    { eje: 'Social', criterio: 'Formalización RNT', formula: 'pctRNT de la zona', variable: 'avanceBarrio.pctRNT' },
+    { eje: 'Económica', criterio: 'Formalización mercantil', formula: 'pctRegistroMercantil de la zona', variable: 'avanceBarrio.pctRegistroMercantil' },
+    { eje: 'Económica', criterio: 'Diversidad de segmentos', formula: '(segmentos atendidos / 6 posibles) × 100', variable: 'productoMercado.topSegmentos' },
+    { eje: 'Ambiental', criterio: 'Adopción de prácticas sostenibles', formula: '(prácticas registradas / 5 prácticas clave) × 100', variable: 'topPracticasSostenibilidad' },
+  ], createColumns([
+    { label: 'Eje', width: 60, value: (row: any) => row.eje },
+    { label: 'Criterio', width: 148, value: (row: any) => row.criterio },
+    { label: 'Fórmula', width: 162, value: (row: any) => row.formula },
+    { label: 'Variable encuesta', width: 98, value: (row: any) => row.variable },
+  ]), fonts, newPage);
+
+  cursor = subTitle(cursor, 'Fórmula de agregación y justificación', fonts, newPage);
+  cursor = drawBadge(cursor, 'metodologico', fonts);
+  cursor = drawParagraph(cursor, 'Puntaje compuesto = 0.25 × Cultural + 0.25 × Social + 0.30 × Económica + 0.20 × Ambiental. Los pesos reflejan la prioridad estratégica del Observatorio: mayor peso a la viabilidad económica por ser condición necesaria de sostenibilidad, y menor peso al eje ambiental por tratarse de una localidad predominantemente urbana donde la sostenibilidad se expresa principalmente en prácticas de gestión y no en ecosistemas naturales frágiles.', { size: 9.25, lineHeight: 13, font: fonts.regular, color: INK, justify: true, gapAfter: spacingScale.sm }, newPage);
+
+  // Calculate scores from available data
+  const avanceBarrio = stats.avanceBarrio ?? [];
+  const empleo = stats.empleo;
+  const totalEmpleo = empleo ? (empleo.totalFormales + empleo.totalInformales) : 0;
+  const inclusionScore = totalEmpleo > 0 && empleo
+    ? Math.round(((empleo.totalMujeres + empleo.totalJovenes + empleo.totalDiversidad) / totalEmpleo) * 100)
+    : null;
+  const byTipo = stats.byTipo ?? [];
+  const culturalScore = byTipo.length > 0 ? Math.min(100, Math.round((byTipo.length / 8) * 100)) : null;
+  const segmentos = stats.productoMercado?.topSegmentos ?? [];
+  const segmentoScore = segmentos.length > 0 ? Math.min(100, Math.round((segmentos.length / 6) * 100)) : null;
+  const sostenibilidad = stats.topPracticasSostenibilidad ?? [];
+  const ambientalScore = Math.min(100, Math.round((Math.min(sostenibilidad.length, 5) / 5) * 100));
+
+  cursor = subTitle(cursor, 'Matriz de viabilidad aplicada (nivel localidad)', fonts, newPage);
+  cursor = drawBadge(cursor, 'dato', fonts);
+  cursor = drawTable(cursor, [
+    {
+      eje: 'Cultural',
+      peso: '25%',
+      score: culturalScore !== null ? String(culturalScore) : 'P',
+      fuente: byTipo.length > 0 ? `${byTipo.length} tipos de actor` : 'Sin dato',
+    },
+    {
+      eje: 'Social (inclusión)',
+      peso: '12.5%',
+      score: inclusionScore !== null ? String(inclusionScore) : 'P',
+      fuente: totalEmpleo > 0 ? `${totalEmpleo} empleos registrados` : 'Sin dato',
+    },
+    {
+      eje: 'Social (RNT)',
+      peso: '12.5%',
+      score: stats.formalizacion?.pctRNT !== undefined ? String(stats.formalizacion.pctRNT) : 'P',
+      fuente: stats.formalizacion ? 'encuesta formalización' : 'Sin dato',
+    },
+    {
+      eje: 'Económica (mercantil)',
+      peso: '15%',
+      score: stats.formalizacion?.pctRegistroMercantil !== undefined ? String(stats.formalizacion.pctRegistroMercantil) : 'P',
+      fuente: stats.formalizacion ? 'encuesta formalización' : 'Sin dato',
+    },
+    {
+      eje: 'Económica (segmentos)',
+      peso: '15%',
+      score: segmentoScore !== null ? String(segmentoScore) : 'P',
+      fuente: segmentos.length > 0 ? `${segmentos.length} segmentos` : 'Sin dato',
+    },
+    {
+      eje: 'Ambiental',
+      peso: '20%',
+      score: String(ambientalScore),
+      fuente: `${sostenibilidad.length} prácticas registradas`,
+    },
+  ], createColumns([
+    { label: 'Eje / Criterio', width: 160, value: (row: any) => row.eje },
+    { label: 'Peso', width: 50, value: (row: any) => row.peso, align: 'center' },
+    { label: 'Puntaje (0-100)', width: 90, value: (row: any) => row.score === 'P' ? '[P] Pendiente' : row.score, align: 'center' },
+    { label: 'Fuente / trazabilidad', width: 168, value: (row: any) => row.fuente },
+  ]), fonts, newPage);
+  cursor = drawParagraph(cursor, 'P = Pendiente de levantamiento en campo. Los valores son del nivel de la localidad completa. Para desagregar por barrio se requiere que avanceBarrio incluya estas variables.', { size: 8, lineHeight: 11, font: fonts.regular, color: MUTED, gapAfter: spacingScale.sm }, newPage);
+
+  if (avanceBarrio.length > 0 && avanceBarrio.some((b: any) => b.pctRNT !== undefined)) {
+    cursor = subTitle(cursor, 'Matriz desagregada por barrio (datos disponibles)', fonts, newPage);
+    cursor = drawBadge(cursor, 'dato', fonts);
+    cursor = drawTable(cursor, avanceBarrio.slice(0, 8), createColumns([
+      { label: 'Barrio', width: 130, value: (row: any) => row.nombre },
+      { label: '% RNT', width: 70, value: (row: any) => row.pctRNT !== undefined ? `${row.pctRNT}` : '[P]', align: 'center' },
+      { label: '% Reg. Merc.', width: 80, value: (row: any) => row.pctRegistroMercantil !== undefined ? `${row.pctRegistroMercantil}` : '[P]', align: 'center' },
+      { label: 'Puntaje Econ.', width: 80, value: (row: any) => row.pctRegistroMercantil !== undefined && row.pctRNT !== undefined ? String(Math.round((row.pctRNT + row.pctRegistroMercantil) / 2)) : '[P]', align: 'center' },
+      { label: '# Encuestas', width: 68, value: (row: any) => String(row.cantidad), align: 'center' },
+									  ]), fonts, newPage);
+  }
+  return cursor;
+}
+
+function renderPotFichasRutas(cursor: Cursor, stats: StatsInput, fonts: Fonts, newPage: (title: string) => Cursor) {
+  cursor = drawBadge(cursor, 'metodologico', fonts);
+  cursor = drawParagraph(cursor, 'Las rutas propuestas se derivan de los patrones observados en la base: concentración territorial, segmentos predominantes y vocación por barrio. No son rutas inventadas, sino hipótesis de articulación sustentadas en evidencia. Requieren verificación en campo antes de su implementación.', { size: 9.25, lineHeight: 13, font: fonts.regular, color: INK, justify: true, gapAfter: spacingScale.sm }, newPage);
+
+  const avanceBarrio = stats.avanceBarrio ?? [];
+  const byBarrio = stats.byBarrio ?? [];
+  const topBarrios = avanceBarrio.length > 0
+    ? avanceBarrio.slice(0, 5).map((b: any) => b.nombre)
+    : byBarrio.slice(0, 5).map((b: any) => b.name);
+
+  const routes = [
+    {
+      name: 'Ruta Patrimonial Las Cruces – San Bernardo',
+      description: 'Las Cruces concentra la mayor densidad de emprendimientos registrados. San Bernardo es barrio colindante con procesos de revitalización urbana documentados (Reina Pinzón et al.; Álvarez Caicedo). La ruta articula gastronomía, artesanías y expresión cultural.',
+      barrios: 'Las Cruces, San Bernardo',
+      tipoTurismo: 'Cultural, patrimonial, gastronómico',
+      evidencia: topBarrios.includes('Las Cruces') ? '[D] Las Cruces es el barrio con mayor presencia en la base de datos.' : '[M] Derivada de concentración en zona central según literatura.',
+      habilitacion: 'Señalización, articulación de actores, RNT de emprendimientos vinculables.',
+      pendiente: 'Inventario de atractivos, capacidad de absorción, infraestructura peatonal.',
+    },
+    {
+      name: 'Ruta Comunitaria Barrio Egipto',
+      description: 'El barrio Egipto es referente documentado de turismo comunitario en la propia localidad (Ferrari, 2021; Breaking Borders, 2022). La ruta se sustenta en la existencia probada del modelo, no en el vínculo operativo del Observatorio con la iniciativa.',
+      barrios: 'Egipto (Localidad de Santa Fe)',
+      tipoTurismo: 'Comunitario, cultural, patrimonio vivo',
+      evidencia: '[M] Referente bibliográfico verificado. Requiere articulación con actores locales.',
+      habilitacion: 'Contacto con colectivos locales, protocolo de visita comunitaria, comunicación.',
+      pendiente: 'Verificar vigencia de la iniciativa, acuerdo de articulación con el colectivo.',
+    },
+    {
+      name: 'Ruta Monserrate – Centro Histórico',
+      description: 'Monserrate es el atractivo de mayor visibilidad de la localidad. Su articulación con los barrios del pie de cerro (Egipto, Las Cruces) y el centro histórico contiguo a La Candelaria genera un corredor de alto flujo potencial (Hamón Ruiz; Menchero Sánchez, 2015).',
+      barrios: 'Monserrate, Egipto, Las Cruces, conexión con La Candelaria',
+      tipoTurismo: 'Turismo religioso, paisajístico, histórico',
+      evidencia: '[M] Derivada de proximidad territorial y literatura. Requiere datos de flujo de visitantes.',
+      habilitacion: 'Articulación con operadores existentes en Monserrate, señalización en barrios de acceso.',
+      pendiente: 'Datos de flujo real de Monserrate, capacidad de carga, accesibilidad para personas con movilidad reducida.',
+    },
+  ];
+
+  routes.forEach((route, index) => {
+    cursor = ensureSpace(cursor, 180, newPage);
+    cursor.page.drawRectangle({ x: PAGE_MARGIN_X, y: cursor.y - 175, width: CONTENT_W, height: 175, color: PAPER, borderColor: LINE, borderWidth: 1 });
+    cursor.page.drawRectangle({ x: PAGE_MARGIN_X, y: cursor.y - 20, width: CONTENT_W, height: 20, color: FOREST });
+    drawText(cursor.page, `Ficha ${index + 1}: ${route.name}`, { x: PAGE_MARGIN_X + spacingScale.sm, y: cursor.y - 15, size: 9.5, font: fonts.bold, color: PAPER });
+    cursor.y -= 28;
+    [
+      ['Barrios articulados', route.barrios],
+      ['Tipo de turismo', route.tipoTurismo],
+      ['Evidencia base', route.evidencia],
+      ['Requisitos de habilitación', route.habilitacion],
+      ['Campos pendientes', route.pendiente],
+    ].forEach(([label, value]) => {
+      cursor = ensureSpace(cursor, 28, newPage);
+      drawText(cursor.page, `${label}:`, { x: PAGE_MARGIN_X + spacingScale.sm, y: cursor.y, size: 8.5, font: fonts.bold, color: FOREST });
+      cursor = drawParagraph(cursor, value, { x: PAGE_MARGIN_X + 148, width: CONTENT_W - 152, size: 8.5, lineHeight: 12, font: fonts.regular, color: INK, gapAfter: spacingScale.xs }, newPage);
+    });
+    cursor = drawParagraph(cursor, safe(route.description), { size: 8.5, lineHeight: 12, font: fonts.regular, color: SLATE, justify: true, gapAfter: spacingScale.md }, newPage);
+  });
+
+  cursor = drawBadge(cursor, 'pendiente', fonts);
+  cursor = drawParagraph(cursor, 'Fichas adicionales quedan pendientes de levantamiento. El Observatorio debe verificar en campo la viabilidad de cada ruta, documentar los actores vinculables y estimar la capacidad de acogida antes de la implementación.', { size: 9, lineHeight: 13, font: fonts.regular, color: INK, justify: true }, newPage);
+  return cursor;
+}
+
+function renderPotTipologias(cursor: Cursor, stats: StatsInput, fonts: Fonts, newPage: (title: string) => Cursor) {
+  const byTipo = stats.byTipo ?? [];
+  const hasGastronomia = byTipo.some((t: any) => /gastronom/i.test(t.name));
+  const hasCultural = byTipo.some((t: any) => /cultural/i.test(t.name));
+  const sostenibilidad = stats.topPracticasSostenibilidad ?? [];
+  const hasSostenibilidad = sostenibilidad.length > 0;
+
+  const tipologias = [
+    {
+      nombre: 'Turismo cultural y patrimonial',
+      evidencia: hasCultural
+        ? `[D] ${byTipo.filter((t: any) => /cultural|artístic/i.test(t.name)).reduce((s: number, t: any) => s + t.value, 0)} emprendimientos de experiencia cultural registrados en la encuesta.`
+        : '[M] La presencia de patrimonio urbano (Las Cruces, San Bernardo, Monserrate) sustenta esta tipología aunque la encuesta no la cuantifica directamente.',
+      condiciones: 'Inventario de atractivos, articulación con entidades del patrimonio, capacitación de guías locales.',
+      referencias: 'Ferrari (2021); Álvarez Caicedo; Reina Pinzón et al.; Sánchez Moreno (La Candelaria — contigüidad territorial).',
+    },
+    {
+      nombre: 'Turismo comunitario',
+      evidencia: '[M] Referente documentado: Barrio Egipto (Breaking Borders). El modelo es viable en Santa Fe según evidencia bibliográfica verificada (Ferrari, 2021; Javeriana, 2022; La Gran Colombia, 2017).',
+      condiciones: 'Articulación con colectivos comunitarios, protocolo de visita, capacitación en hospitalidad, distribución equitativa de beneficios.',
+      referencias: 'Ferrari (2021); Pontificia Universidad Javeriana (2022); Universidad La Gran Colombia (2017).',
+    },
+    {
+      nombre: 'Turismo gastronómico',
+      evidencia: hasGastronomia
+        ? `[D] Gastronomía es el tipo de actor más frecuente: ${byTipo.find((t: any) => /gastronom/i.test(t.name))?.value ?? 0} emprendimientos registrados.`
+        : '[M] Tipología propuesta con base en perfil probable de los emprendimientos.',
+      condiciones: 'Diseño de rutas gastronómicas articuladas, identidad de marca, normativa sanitaria vigente.',
+      referencias: 'Menchero Sánchez (2015) — aplicable por contigüidad territorial con La Candelaria.',
+    },
+    {
+      nombre: 'Turismo sostenible',
+      evidencia: hasSostenibilidad
+        ? `[D] ${sostenibilidad.length} prácticas de sostenibilidad distintas registradas entre los emprendimientos encuestados (${sostenibilidad[0]?.name ?? ''}: ${sostenibilidad[0]?.value ?? 0} menciones).`
+        : '[M] Tipología propuesta con base en potencial identificado.',
+      condiciones: 'Certificaciones de sostenibilidad, articulación con programas de Bogotá Región Sostenible, medición de huella de carbono.',
+      referencias: 'Hamón Ruiz (Monserrate); Guasca & Osorio — turismo accesible, La Candelaria (contigüidad territorial).',
+    },
+  ];
+
+  tipologias.forEach((tipologia) => {
+    cursor = subTitle(cursor, tipologia.nombre, fonts, newPage);
+    cursor = drawParagraph(cursor, tipologia.evidencia, { size: 9.25, lineHeight: 13, font: fonts.regular, color: INK, justify: true, gapAfter: spacingScale.xs }, newPage);
+    drawText(cursor.page, 'Condiciones de desarrollo:', { x: PAGE_MARGIN_X, y: cursor.y, size: 8.5, font: fonts.bold, color: FOREST });
+    cursor.y -= 14;
+    cursor = drawParagraph(cursor, tipologia.condiciones, { x: PAGE_MARGIN_X + 8, width: CONTENT_W - 8, size: 8.5, lineHeight: 12, font: fonts.regular, color: INK, gapAfter: spacingScale.xs }, newPage);
+    drawText(cursor.page, 'Referencias:', { x: PAGE_MARGIN_X, y: cursor.y, size: 8.5, font: fonts.bold, color: MUTED });
+    cursor.y -= 14;
+    cursor = drawParagraph(cursor, tipologia.referencias, { x: PAGE_MARGIN_X + 8, width: CONTENT_W - 8, size: 8, lineHeight: 11, font: fonts.regular, color: MUTED, gapAfter: spacingScale.md }, newPage);
+  });
+  return cursor;
+}
+
+function renderPotCondicionesBrechas(cursor: Cursor, stats: StatsInput, fonts: Fonts, newPage: (title: string) => Cursor) {
+  cursor = drawBadge(cursor, 'dato', fonts);
+  cursor = drawParagraph(cursor, 'Las condiciones habilitantes se derivan de las brechas identificadas en los datos de formalización, infraestructura y capacidades de los emprendimientos encuestados.', { size: 9.25, lineHeight: 13, font: fonts.regular, color: INK, justify: true, gapAfter: spacingScale.sm }, newPage);
+
+  const formal = stats.formalizacion;
+  if (formal) {
+    cursor = subTitle(cursor, 'Brechas de formalización por zona', fonts, newPage);
+    cursor = drawBadge(cursor, 'dato', fonts);
+    [
+      ['Registro Mercantil / Cámara de Comercio', formal.pctRegistroMercantil, 'Condición básica para acceder a financiación y contratos institucionales.'],
+      ['Registro Nacional de Turismo (RNT)', formal.pctRNT, 'Obligatorio para operar como prestador turístico. Brecha crítica.'],
+      ['RUT vigente', formal.pctRUT, 'Requisito para facturación y contratación con entes públicos.'],
+      ['Facturación electrónica', formal.pctFacturacionElectronica, 'Condición para ventas en plataformas y turoperadoras.'],
+    ].forEach(([label, value, note]) => {
+      cursor = drawPercentBar(cursor, String(label), Number(value), fonts, newPage);
+      cursor = drawParagraph(cursor, String(note), { x: PAGE_MARGIN_X + 8, width: CONTENT_W - 8, size: 8, lineHeight: 11, font: fonts.regular, color: MUTED, gapAfter: spacingScale.xs }, newPage);
+    });
+  }
+
+  const infra = stats.infraestructura;
+  if (infra) {
+    cursor = subTitle(cursor, 'Brechas de infraestructura', fonts, newPage);
+    cursor = drawBadge(cursor, 'dato', fonts);
+    [
+      ['Sede física propia', infra.pctSedeFisica],
+      ['Señalización visible', infra.pctSeñalizacion],
+      ['Baños disponibles para visitantes', infra.pctBanos],
+      ['Botiquín / equipamiento de emergencias', infra.pctBotiquin],
+      ['Conectividad a internet', infra.pctConectividad],
+    ].forEach(([label, value]) => { cursor = drawPercentBar(cursor, String(label), Number(value), fonts, newPage); });
+  }
+
+  cursor = subTitle(cursor, 'Condiciones habilitantes por zona (resumen)', fonts, newPage);
+  cursor = drawBadge(cursor, 'metodologico', fonts);
+  cursor = drawTable(cursor, [
+    { zona: 'Las Cruces', necesita: 'Señalización, articulación de actores, digitalización de oferta', prioridad: 'Alta' },
+    { zona: 'San Bernardo', necesita: 'Formalización RNT, capacitación en hospitalidad, sede de acogida', prioridad: 'Alta' },
+    { zona: 'Egipto', necesita: 'Articulación con colectivos comunitarios, protocolo de visita', prioridad: 'Media' },
+    { zona: 'Monserrate / piedemonte', necesita: 'Rutas de acceso accesibles, info turística multilingüe', prioridad: 'Media' },
+    { zona: 'Resto de la localidad', necesita: '[P] Requiere levantamiento específico por barrio', prioridad: '[P]' },
+  ], createColumns([
+    { label: 'Zona', width: 118, value: (row: any) => row.zona },
+    { label: 'Condiciones necesarias', width: 278, value: (row: any) => row.necesita },
+    { label: 'Prioridad', width: 72, value: (row: any) => row.prioridad, align: 'center' },
+  ]), fonts, newPage);
+  return cursor;
+}
+
+function renderPotRecomendaciones(cursor: Cursor, stats: StatsInput, fonts: Fonts, newPage: (title: string) => Cursor) {
+  cursor = drawBadge(cursor, 'metodologico', fonts);
+  cursor = drawParagraph(cursor, 'Las recomendaciones están ordenadas por criterio explícito: impacto potencial alto con esfuerzo bajo o medio primero; acciones de largo plazo y alta complejidad al final. Cada recomendación está vinculada a la evidencia que la sustenta.', { size: 9.25, lineHeight: 13, font: fonts.regular, color: INK, justify: true, gapAfter: spacingScale.sm }, newPage);
+
+  const formal = stats.formalizacion;
+  const rntBrecha = formal ? (100 - formal.pctRNT) : null;
+  const mercantilBrecha = formal ? (100 - formal.pctRegistroMercantil) : null;
+
+  cursor = drawTable(cursor, [
+    {
+      rec: 'Campaña de regularización RNT: facilitar el trámite para los emprendimientos no registrados.',
+      impacto: 'Alto',
+      esfuerzo: 'Bajo',
+      evidencia: rntBrecha !== null ? `[D] ${rntBrecha}% sin RNT` : '[M] Brecha de formalización identificada',
+    },
+    {
+      rec: 'Diseño e implementación de la Ruta Patrimonial Las Cruces – San Bernardo con señalización y material digital.',
+      impacto: 'Alto',
+      esfuerzo: 'Medio',
+      evidencia: '[D] Las Cruces: mayor concentración de emprendimientos. [M] Sustentado en literatura (Álvarez Caicedo; Reina Pinzón).',
+    },
+    {
+      rec: 'Articulación con el colectivo Breaking Borders (Barrio Egipto) para incorporar el caso como referente de turismo comunitario en la oferta del Observatorio.',
+      impacto: 'Alto',
+      esfuerzo: 'Medio',
+      evidencia: '[M] Referente documentado (Ferrari, 2021). Requiere acercamiento institucional.',
+    },
+    {
+      rec: 'Programa de digitalización de la oferta: capacitar a los emprendimientos en herramientas de venta en línea y presencia en plataformas turísticas.',
+      impacto: 'Alto',
+      esfuerzo: 'Medio',
+      evidencia: '[D] Brecha de herramientas digitales identificada en encuesta.',
+    },
+    {
+      rec: 'Levantamiento de inventario de atractivos turísticos por barrio, como insumo para las rutas propuestas y la Matriz de Viabilidad.',
+      impacto: 'Alto',
+      esfuerzo: 'Alto',
+      evidencia: '[P] Dato no existente en la base actual. Insumo indispensable para el Informe 3.',
+    },
+    {
+      rec: 'Diseño de un sistema de monitoreo con indicadores de impacto (visitantes, ingresos, empleo generado) para el seguimiento periódico del Observatorio.',
+      impacto: 'Alto',
+      esfuerzo: 'Alto',
+      evidencia: '[M] Criterio estratégico para la sostenibilidad del Observatorio.',
+    },
+  ], createColumns([
+    { label: 'Recomendación', width: 240, value: (row: any) => row.rec },
+    { label: 'Impacto', width: 56, value: (row: any) => row.impacto, align: 'center' },
+    { label: 'Esfuerzo', width: 58, value: (row: any) => row.esfuerzo, align: 'center' },
+    { label: 'Evidencia / trazabilidad', width: 114, value: (row: any) => row.evidencia },
+  ]), fonts, newPage);
+  return cursor;
+}
+
+function renderPotReferencias(cursor: Cursor, fonts: Fonts, newPage: (title: string) => Cursor) {
+  cursor = drawParagraph(cursor, 'Las siguientes referencias han sido verificadas previamente. Las referencias 7–9 corresponden a la localidad vecina de La Candelaria; se citan por contigüidad territorial y continuidad del centro histórico, pero esta distinción se señala explícitamente.', { size: 9, lineHeight: 13, font: fonts.regular, color: INK, justify: true, gapAfter: spacingScale.md }, newPage);
+
+  const refs = [
+    { num: '1', texto: 'Ferrari, S. (2021). El turismo comunitario urbano como forma de re-existencia cultural y laboral. El modelo de Barrio Egipto (Bogotá). Cuestiones de Sociología, (25). https://doi.org/10.24215/23468904e115 [Santa Fe — caso central]' },
+    { num: '2', texto: 'Pontificia Universidad Javeriana (2022). Breaking Borders: la comunicación como herramienta para fortalecer el emprendimiento social en pro de la convivencia pacífica del barrio Egipto. Comunicación Social. http://hdl.handle.net/10554/64642 [Santa Fe]' },
+    { num: '3', texto: 'Universidad La Gran Colombia (2017). Habitantes del barrio Egipto de Bogotá están cambiando armas por turistas como opción de vida. http://hdl.handle.net/11396/4467 [Santa Fe]' },
+    { num: '4', texto: 'Álvarez Caicedo, J. La transformación del barrio Las Cruces y su consolidación como borde urbano durante el siglo XX. Universidad Nacional de Colombia, Maestría en Urbanismo. https://repositorio.unal.edu.co/handle/unal/58665 [Santa Fe]' },
+    { num: '5', texto: 'Reina Pinzón, A. C. et al. San Bernardo, una alameda, ciudad y diversidad: plan de revitalización del sector compacto de San Bernardo y Las Cruces. Universidad Piloto de Colombia, Arquitectura. https://repository.unipiloto.edu.co/handle/20.500.12277/2144 [Santa Fe]' },
+    { num: '6', texto: 'Hamón Ruiz, A. M. ¿Cómo llevar a cabo un turismo sostenible en Monserrate? Universidad Externado de Colombia. [Santa Fe — Monserrate]' },
+    { num: '7', texto: 'Menchero Sánchez, M. (2015). Propuesta y diseño de un sistema de información turística para centros históricos: el caso de La Candelaria, Bogotá. [La Candelaria — citada por contigüidad territorial con Santa Fe]' },
+    { num: '8', texto: 'Sánchez Moreno, F. La revitalización urbana como base de la planificación turística en el centro histórico de Bogotá, sector de La Candelaria. Universidad de Salamanca. https://gredos.usal.es/handle/10366/129705 [La Candelaria — citada por contigüidad territorial con Santa Fe]' },
+    { num: '9', texto: 'Guasca Camacho, B. S. y Osorio Hernández, S. M. Evaluación de estrategias de implementación sobre turismo accesible en el centro histórico de La Candelaria para turistas con discapacidad auditiva. Universitaria Agustiniana. [La Candelaria — citada por contigüidad territorial con Santa Fe]' },
+  ];
+
+  refs.forEach((ref) => {
+    cursor = ensureSpace(cursor, 36, newPage);
+    drawText(cursor.page, ref.num + '.', { x: PAGE_MARGIN_X, y: cursor.y, size: 8.5, font: fonts.bold, color: FOREST });
+    cursor = drawParagraph(cursor, ref.texto, { x: PAGE_MARGIN_X + 18, width: CONTENT_W - 18, size: 8.5, lineHeight: 12, font: fonts.regular, color: INK, gapAfter: spacingScale.sm }, newPage);
+  });
+
+  cursor = drawInfoBox(cursor, 'Nota sobre referencias 7, 8 y 9', [
+    'Las referencias 7, 8 y 9 corresponden a la localidad de La Candelaria, localidad vecina de Santa Fe. Se incluyen por la continuidad del centro histórico y la contigüidad territorial, pero no deben interpretarse como estudios de Santa Fe. Las referencias 1–5 sí corresponden directamente a barrios de la Localidad de Santa Fe.',
+  ], fonts, newPage);
+  return cursor;
+}
+
+function renderPotAnexoMetodologico(cursor: Cursor, stats: StatsInput, fonts: Fonts, newPage: (title: string) => Cursor) {
+  cursor = drawParagraph(cursor, 'Este anexo documenta la construcción de cada indicador del Informe 2, indicando su origen: dato derivado de la encuesta [D], criterio metodológico propuesto [M], o pendiente de levantamiento en campo [P].', { size: 9.25, lineHeight: 13, font: fonts.regular, color: INK, justify: true, gapAfter: spacingScale.sm }, newPage);
+
+  const formal = stats.formalizacion;
+  cursor = drawTable(cursor, [
+    { indicador: 'Potencial por barrio', origen: '[D]', fuente: 'avanceBarrio (encuesta)', nota: 'Derivado de frecuencia y % de formalización por barrio. No es inventario de atractivos.' },
+    { indicador: 'Tipo de actor turístico', origen: '[D]', fuente: 'byTipo (encuesta)', nota: 'Registro directo de la encuesta.' },
+    { indicador: 'Prácticas sostenibles', origen: '[D]', fuente: 'topPracticasSostenibilidad (encuesta)', nota: 'Registro directo de la encuesta.' },
+    { indicador: 'Puntaje eje cultural', origen: '[D]', fuente: 'byTipo', nota: '(tipos distintos / 8 posibles) × 100.' },
+    { indicador: 'Puntaje eje social', origen: '[D/P]', fuente: 'empleo.*, formalizacion.pctRNT', nota: 'Parcialmente derivado. RNT por barrio pendiente.' },
+    { indicador: 'Puntaje eje económico', origen: '[D]', fuente: 'formalizacion, productoMercado.topSegmentos', nota: 'Derivado de formalización y segmentos.' },
+    { indicador: 'Puntaje eje ambiental', origen: '[D]', fuente: 'topPracticasSostenibilidad', nota: '(prácticas / 5 clave) × 100.' },
+    { indicador: 'Fichas de rutas', origen: '[M]', fuente: 'avanceBarrio + literatura', nota: 'Hipótesis de articulación, no rutas implementadas.' },
+    { indicador: 'Inventario de atractivos', origen: '[P]', fuente: 'No existe en la base', nota: 'Requiere levantamiento en campo.' },
+    { indicador: 'Datos de flujo de visitantes', origen: '[P]', fuente: 'No existe en la base', nota: 'Requiere instrumento específico.' },
+    { indicador: 'Capacidad de carga por ruta', origen: '[P]', fuente: 'No existe en la base', nota: 'Requiere aforo técnico.' },
+    { indicador: 'Referencias bibliográficas', origen: '[M]', fuente: 'Verificadas por el equipo', nota: 'Refs. 1–5 Santa Fe; refs. 7–9 La Candelaria (contigüidad).' },
+  ], createColumns([
+    { label: 'Indicador', width: 148, value: (row: any) => row.indicador },
+    { label: 'Origen', width: 44, value: (row: any) => row.origen, align: 'center' },
+    { label: 'Fuente variable', width: 138, value: (row: any) => row.fuente },
+    { label: 'Nota metodológica', width: 138, value: (row: any) => row.nota },
+  ]), fonts, newPage);
+
+  cursor = subTitle(cursor, 'Variables aún por incorporar a la encuesta', fonts, newPage);
+  cursor = drawBadge(cursor, 'pendiente', fonts);
+  cursor = drawBulletList(cursor, [
+    'Barrio exacto del emprendimiento (cuando falta en avanceBarrio).',
+    'Inventario de atractivos turísticos por zona (requiere instrumento de campo diferenciado).',
+    'Número de visitantes atendidos por período (afluencia real, no solo capacidad declarada).',
+    'Idiomas de atención declarados por el emprendimiento.',
+    'Accesibilidad universal: adecuaciones para personas con discapacidad.',
+    'Ingresos estimados por turismo (para calcular viabilidad económica real por barrio).',
+  ], fonts, newPage);
+  return cursor;
+}
+
+// ─── Informe 2 full generation ────────────────────────────────────────────────
+async function generatePotencialesReport(stats: StatsInput, _summary: string, updatedAt: string, logs: string[]): Promise<PdfBuildResult> {
+  const pdfDoc = await PDFDocument.create();
+  const fonts = await loadFonts(pdfDoc, logs);
+  const pageTitles = new Map<PDFPage, string>();
+  const tocItems: TocItem[] = [];
+
+  const cover = pdfDoc.addPage([PAGE_W, PAGE_H]);
+  pageTitles.set(cover, 'Portada');
+  const tocPage = pdfDoc.addPage([PAGE_W, PAGE_H]);
+  pageTitles.set(tocPage, 'Tabla de contenido');
+
+  const templatePages: { cover?: PDFEmbeddedPage; interior?: PDFEmbeddedPage } = {};
+  try {
+    const templatePath = path.join(process.cwd(), 'public', 'brand', 'membrete-fundesco.pdf');
+    const templateBytes = await fs.readFile(templatePath);
+    const templateDoc = await PDFDocument.load(templateBytes);
+    const pageCount = templateDoc.getPageCount();
+    const [coverEmbedded] = await pdfDoc.embedPdf(templateDoc, [0]);
+    templatePages.cover = coverEmbedded;
+    const interiorIndex = pageCount >= 2 ? 1 : 0;
+    const [interiorEmbedded] = await pdfDoc.embedPdf(templateDoc, [interiorIndex]);
+    templatePages.interior = interiorEmbedded;
+    cover.drawPage(coverEmbedded, { x: 0, y: 0, width: PAGE_W, height: PAGE_H });
+    tocPage.drawPage(interiorEmbedded, { x: 0, y: 0, width: PAGE_W, height: PAGE_H });
+    logs.push(`letterhead: loaded (${pageCount} page${pageCount > 1 ? 's' : ''})`);
+  } catch (err) {
+    logs.push(`letterhead: could not load — ${err instanceof Error ? err.message : 'unknown error'}`);
+  }
+
+  drawPotencialesCover(cover, fonts, stats, updatedAt);
+
+  const newPage = createPageFactory(pdfDoc, pageTitles, templatePages);
+  const sectionDefs = getSectionsForReportType('potenciales');
+  const labelFor = (id: string) => sectionDefs.find((s) => s.id === id)?.label ?? id;
+  const startSection = (label: string) => {
+    const cursor = newPage(label);
+    tocItems.push({ label, pageNumber: pdfDoc.getPageCount() });
+    return sectionTitle(cursor, label.toUpperCase(), fonts, newPage);
+  };
+
+  // Section 1 — Nota al lector
+  let cursor = startSection(labelFor('pot-nota-lector'));
+  cursor = renderPotNotaLector(cursor, fonts, newPage);
+
+  // Section 2 — Marco conceptual
+  cursor = startSection(labelFor('pot-marco-conceptual'));
+  cursor = renderPotMarcoConceptual(cursor, fonts, newPage);
+
+  // Section 3 — Zonas con potencial
+  cursor = startSection(labelFor('pot-zonas-potencial'));
+  cursor = renderPotZonasPotencial(cursor, stats, fonts, newPage);
+
+  // Section 4 — Matriz de viabilidad
+  cursor = startSection(labelFor('pot-matriz-viabilidad'));
+  cursor = renderPotMatrizViabilidad(cursor, stats, fonts, newPage);
+
+  // Section 5 — Fichas de rutas
+  cursor = startSection(labelFor('pot-fichas-rutas'));
+  cursor = renderPotFichasRutas(cursor, stats, fonts, newPage);
+
+  // Section 6 — Tipologías de turismo
+  cursor = startSection(labelFor('pot-tipologias'));
+  cursor = renderPotTipologias(cursor, stats, fonts, newPage);
+
+  // Section 7 — Condiciones habilitantes y brechas
+  cursor = startSection(labelFor('pot-condiciones-brechas'));
+  cursor = renderPotCondicionesBrechas(cursor, stats, fonts, newPage);
+
+  // Section 8 — Recomendaciones estratégicas
+  cursor = startSection(labelFor('pot-recomendaciones'));
+  cursor = renderPotRecomendaciones(cursor, stats, fonts, newPage);
+
+  // Section 9 — Referencias bibliográficas
+  cursor = startSection(labelFor('pot-referencias'));
+  cursor = renderPotReferencias(cursor, fonts, newPage);
+
+  // Section 10 — Anexo metodológico
+  cursor = startSection(labelFor('pot-anexo-metodologico'));
+  cursor = renderPotAnexoMetodologico(cursor, stats, fonts, newPage);
+
+  // Photos in relevant sections (use available real images)
+  const totalPages = pdfDoc.getPageCount();
+  const pages = pdfDoc.getPages();
+  pages.forEach((page, index) => {
+    if (index === 0) return;
+    const title = pageTitles.get(page) || 'Informe 2';
+    drawPageNumber(page, fonts, index + 1, totalPages);
+    drawSectionLabel(page, title, fonts);
+  });
+
+  // Draw TOC
+  let tocCursor: Cursor = { page: tocPage, y: CONTENT_TOP, title: 'Tabla de contenido' };
+  drawText(tocPage, 'Tabla de contenido — Informe 2', { x: PAGE_MARGIN_X, y: tocCursor.y, size: typeScale.lg, font: fonts.bold, color: FOREST });
+  tocCursor.y -= 10;
+  tocPage.drawRectangle({ x: PAGE_MARGIN_X, y: tocCursor.y, width: CONTENT_W, height: 2, color: LIME });
+  tocCursor.y -= 22;
+  tocItems.forEach((item, index) => {
+    if (tocCursor.y - 24 < CONTENT_BOTTOM) return;
+    const rowY = tocCursor.y - 4;
+    tocPage.drawRectangle({ x: PAGE_MARGIN_X, y: rowY, width: CONTENT_W, height: 20, color: index % 2 === 0 ? STRIPE : PAPER, borderColor: LINE, borderWidth: 0.5 });
+    const pageLabel = String(item.pageNumber);
+    const pageWidth = fonts.bold.widthOfTextAtSize(pageLabel, 10);
+    const pageX = PAGE_MARGIN_X + CONTENT_W - spacingScale.sm - pageWidth;
+    drawText(tocPage, truncateToWidth(item.label, CONTENT_W - pageWidth - spacingScale.xxxl, fonts.bold, 9.5), { x: PAGE_MARGIN_X + spacingScale.sm, y: tocCursor.y, size: 9.5, font: fonts.bold, color: INK });
+    drawText(tocPage, pageLabel, { x: pageX, y: tocCursor.y, size: 10, font: fonts.bold, color: FOREST });
+    tocCursor.y -= 24;
+  });
+  drawPageNumber(tocPage, fonts, 2, totalPages);
+  drawSectionLabel(tocPage, 'Tabla de contenido', fonts);
+
+  logs.unshift(`pdf pages: ${totalPages} [Informe 2 — Potenciales]`);
+  const pdfBytes = await pdfDoc.save();
+  return { pdfBytes, logs };
+}
+
+
 export async function generatePdfReport(payload: PdfReportPayload): Promise<PdfBuildResult> {
   const logs: string[] = [];
   const stats: StatsInput = payload.stats ?? { total: 0, rutas: 0, exactos: 0, estimados: 0 };
   const summary = payload.summary?.trim() ? payload.summary : buildFallbackSummary(stats);
   const updatedAt = payload.updatedAt ?? new Date().toLocaleString('es-CO');
   const reportType = payload.reportType ?? 'diagnostico';
+
+  if (reportType === 'potenciales') {
+    return generatePotencialesReport(stats, summary, updatedAt, logs);
+  }
+
   const pdfDoc = await PDFDocument.create();
   const fonts = await loadFonts(pdfDoc, logs);
   const analysis = buildDeterministicAnalysis(stats);

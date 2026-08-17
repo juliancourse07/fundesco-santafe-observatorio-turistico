@@ -14,6 +14,8 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [pdfLoading, setPdfLoading] = useState(false);
   const [pdfStep, setPdfStep] = useState('');
+  const [pdfLoading2, setPdfLoading2] = useState(false);
+  const [pdfStep2, setPdfStep2] = useState('');
 
   useEffect(() => {
     fetch('/api/respuestas', { cache: 'no-store' }).then(r => r.json()).then(async d => {
@@ -35,12 +37,12 @@ export default function Dashboard() {
     setPdfLoading(true);
     try {
       setPdfStep('Generando PDF...');
-      const res = await fetch('/api/pdf', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stats, summary, updatedAt: data.updatedAt }) });
+      const res = await fetch('/api/pdf', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stats, summary, updatedAt: data.updatedAt, reportType: 'diagnostico' }) });
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'informe-fundesco-santa-fe.pdf';
+      a.download = 'informe-1-diagnostico-fundesco-santa-fe.pdf';
       a.click();
       URL.revokeObjectURL(url);
     } finally {
@@ -48,6 +50,26 @@ export default function Dashboard() {
       setPdfStep('');
     }
   }
+
+  async function handleDownloadPdf2() {
+    if (!data) return;
+    setPdfLoading2(true);
+    try {
+      setPdfStep2('Generando PDF...');
+      const res = await fetch('/api/pdf', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stats, summary, updatedAt: data.updatedAt, reportType: 'potenciales' }) });
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'informe-2-potenciales-fundesco-santa-fe.pdf';
+      a.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setPdfLoading2(false);
+      setPdfStep2('');
+    }
+  }
+
 
   if (loading) return (
     <main className="p-8 min-h-screen flex items-center justify-center" lang="es">
@@ -79,11 +101,15 @@ export default function Dashboard() {
           <p className="mt-2 text-xs text-white/60">Última lectura: {data.updatedAt} {stats.fechaInicio && stats.fechaFin && `· Período: ${stats.fechaInicio} - ${stats.fechaFin}`}</p>
         </div>
         <div className="shrink-0 flex flex-col gap-2 items-end">
-          <button onClick={handleDownloadPdf} disabled={pdfLoading} aria-label="Descargar informe en PDF"
-            className="bg-fundesco-lime text-fundesco-forest font-bold px-6 py-3 rounded-2xl hover:bg-lime-400 disabled:opacity-60 transition-colors">
-            {pdfLoading ? (pdfStep || 'Procesando...') : '⬇ Descargar informe PDF'}
+          <button onClick={handleDownloadPdf} disabled={pdfLoading || pdfLoading2} aria-label="Descargar Informe 1 — Diagnóstico"
+            className="bg-fundesco-lime text-fundesco-forest font-bold px-6 py-3 rounded-2xl hover:bg-lime-400 disabled:opacity-60 transition-colors text-sm">
+            {pdfLoading ? (pdfStep || 'Procesando...') : '⬇ Informe 1 — Diagnóstico'}
           </button>
-          {pdfLoading && <div className="w-40 h-1.5 bg-white/20 rounded-full overflow-hidden"><div className="h-full bg-fundesco-lime rounded-full animate-pulse w-3/4" /></div>}
+          <button onClick={handleDownloadPdf2} disabled={pdfLoading || pdfLoading2} aria-label="Descargar Informe 2 — Potenciales y estrategia"
+            className="bg-white/15 text-white font-bold px-6 py-3 rounded-2xl hover:bg-white/25 disabled:opacity-60 transition-colors border border-white/30 text-sm">
+            {pdfLoading2 ? (pdfStep2 || 'Procesando...') : '⬇ Informe 2 — Potenciales y estrategia'}
+          </button>
+          {(pdfLoading || pdfLoading2) && <div className="w-40 h-1.5 bg-white/20 rounded-full overflow-hidden"><div className="h-full bg-fundesco-lime rounded-full animate-pulse w-3/4" /></div>}
         </div>
       </div>
     </section>
