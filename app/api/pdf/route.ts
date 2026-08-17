@@ -6,7 +6,7 @@ export const revalidate = 0;
 
 export async function POST(request: NextRequest) {
   const payload = await request.json().catch(() => ({}));
-  const { pdfBytes, logs } = await generatePdfReport(payload);
+  const { pdfBytes, logs } = await generatePdfReport({ ...payload, reportType: payload.reportType ?? 'diagnostico' });
   logs.forEach((entry) => console.info(`[pdf] ${entry}`));
 
   return new Response(Buffer.from(pdfBytes), {

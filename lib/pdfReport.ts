@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import fontkit from '@pdf-lib/fontkit';
+import formularioSchema from '@/schema-formulario.json';
 import {
   PDFDocument,
   PDFPage,
@@ -17,13 +18,15 @@ import {
 } from 'pdf-lib';
 import { buildDeterministicAnalysis, buildFallbackSummary, sanitizePdfText, type StatsInput } from './analysis';
 import { colorHex, spacingScale, typeScale } from './designTokens';
+import { buildMapSvgGeometry, type BarrioData } from './mapSvg';
+import { getSectionsForReportType, type ReportType } from './reportSections';
 import { santafeImages, type SantafeImage } from './santafeImages';
-import { buildSantaFeSvgMap, type BarrioData } from './mapSvg';
 
 export type PdfReportPayload = {
   stats?: StatsInput;
   summary?: string;
   updatedAt?: string;
+  reportType?: ReportType;
   /** @deprecated mapImageBase64 is no longer used; the map is generated as SVG server-side */
   mapImageBase64?: string;
 };
@@ -435,6 +438,204 @@ async function drawContextImageCard(pdfDoc: PDFDocument, cursor: Cursor, imageMe
   return cursor;
 }
 
+function drawMapLabels(page: PDFPage, labels: Array<{ text: string; x: number; y: number; size: number; bold: boolean; color: string; anchor: 'left' | 'center' | 'right' }>, fonts: Fonts, area: { x: number; y: number; width: number; height: number; svgWidth: number; svgHeight: number }) {
+  const scaleX = area.width / area.svgWidth;
+  const scaleY = area.height / area.svgHeight;
+  const scale = Math.min(scaleX, scaleY);
+
+  labels.forEach((label) => {
+    const font = label.bold ? fonts.bold : fonts.regular;
+    const size = label.size * scale;
+    const textWidth = font.widthOfTextAtSize(safe(label.text), size);
+    let drawX = area.x + (label.x * scaleX);
+    if (label.anchor === 'center') drawX -= textWidth / 2;
+    if (label.anchor === 'right') drawX -= textWidth;
+    const drawY = area.y + (area.height - (label.y * scaleY));
+    drawText(page, label.text, { x: drawX, y: drawY, size, font, color: /^#/.test(label.color) ? toRgb(label.color) : INK });
+  });
+}
+
+function renderActorCharacterizationSection(cursor: Cursor, stats: StatsInput, fonts: Fonts, newPage: (title: string) => Cursor) {
+  const actorRows = (stats.byTipo ?? []).map((item) => ({
+    tipo: item.name,
+    volumen: item.value,
+    pct: `${Math.round((item.value / Math.max(stats.total || 1, 1)) * 100)}%`,
+  }));
+
+  if (actorRows.length) {
+    cursor = drawTable(cursor, actorRows, createColumns([
+      { label: 'Tipo de Actor', width: 260, value: (row: any) => row.tipo },
+      { label: 'Volumen (n)', width: 110, value: (row: any) => String(row.volumen), align: 'center' },
+      { label: '% del total', width: 110, value: (row: any) => row.pct, align: 'center' },
+    ]), fonts, newPage);
+    const topActors = actorRows.slice(0, 3).map((row) => `${row.tipo} (${row.pct})`).join(', ');
+    cursor = drawParagraph(cursor, `La composición del ecosistema turístico observado se concentra en ${topActors || 'tipologías aún no clasificadas'}, lo que permite orientar acciones de fortalecimiento diferenciadas por vocación productiva y peso relativo dentro de la muestra.`, {
+      size: 9.25,
+      lineHeight: 13,
+      font: fonts.regular,
+      color: INK,
+      justify: true,
+    }, newPage);
+  } else {
+    cursor = drawParagraph(cursor, 'No hay desagregación por tipo de actor disponible en la base consolidada para construir esta tabla.', {
+      size: 9.25,
+      lineHeight: 13,
+      font: fonts.regular,
+      color: INK,
+    }, newPage);
+  }
+
+  if (stats.formalizacion && actorRows.length) {
+    cursor = subTitle(cursor, 'Referencia general de formalización por composición actoral', fonts, newPage);
+    cursor = drawParagraph(cursor, 'La fuente actual no desagrega formalización por tipo de actor; por transparencia se presenta una referencia general para leer la composición actoral frente al promedio de la base total.', {
+      size: 8.5,
+      lineHeight: 12,
+      font: fonts.regular,
+      color: MUTED,
+      justify: true,
+    }, newPage);
+    cursor = drawTable(cursor, actorRows, createColumns([
+      { label: 'Tipo de Actor', width: 180, value: (row: any) => row.tipo },
+      { label: 'Participación', width: 80, value: (row: any) => row.pct, align: 'center' },
+      { label: 'Reg. Mercantil', width: 80, value: () => `${stats.formalizacion?.pctRegistroMercantil ?? 0}%`, align: 'center' },
+      { label: 'RNT', width: 60, value: () => `${stats.formalizacion?.pctRNT ?? 0}%`, align: 'center' },
+      { label: 'RUT', width: 60, value: () => `${stats.formalizacion?.pctRUT ?? 0}%`, align: 'center' },
+    ]), fonts, newPage);
+  }
+
+  return cursor;
+}
+
+function renderOpportunitiesSection(cursor: Cursor, stats: StatsInput, analysis: ReturnType<typeof buildDeterministicAnalysis>, fonts: Fonts, newPage: (title: string) => Cursor) {
+  const weakestScore = stats.scores?.slice().sort((a, b) => a.value - b.value)[0];
+  const patterns = [
+    stats.formalizacion ? `La correlación entre formalización tributaria y turística sigue siendo dispareja: RUT (${stats.formalizacion.pctRUT}%) supera a RNT (${stats.formalizacion.pctRNT}%), lo que abre una oportunidad de acompañamiento focalizado.` : 'No hay datos suficientes para inferir correlaciones robustas de formalización.',
+    `La concentración territorial ubica a ${analysis.concentration.topBarrio} como principal nodo observado y al top 3 de barrios con ${analysis.concentration.top3Share}% del total, señal de polos claros para activar circuitos y ampliar barridos complementarios.`,
+    weakestScore ? `La brecha de capacidades más visible aparece en ${weakestScore.name} (${weakestScore.value}/5), con oportunidades de asistencia técnica asociadas a ${stats.necesidades?.slice(0, 3).map((item) => item.name).join(', ') || 'fortalecimiento operativo'}.` : 'No hay autoevaluaciones suficientes para aislar una brecha dominante de capacidades.',
+  ];
+  cursor = drawBulletList(cursor, patterns, fonts, newPage);
+
+  const opportunityRows = analysis.recommendations.map((recommendation, index) => ({
+    oportunidad: recommendation.action,
+    evidencia: analysis.brechasYRiesgos[index] ?? recommendation.indicator,
+    horizonte: recommendation.priority === 'Alta' ? 'Corto plazo' : recommendation.priority === 'Media' ? 'Mediano plazo' : 'Escalonado',
+  }));
+
+  cursor = drawTable(cursor, opportunityRows, createColumns([
+    { label: 'Oportunidad identificada', width: 250, value: (row: any) => row.oportunidad },
+    { label: 'Evidencia de soporte', width: 170, value: (row: any) => row.evidencia },
+    { label: 'Horizonte', width: 80, value: (row: any) => row.horizonte, align: 'center' },
+  ]), fonts, newPage);
+
+  return cursor;
+}
+
+function renderExpandedMethodologySection(cursor: Cursor, stats: StatsInput, fonts: Fonts, newPage: (title: string) => Cursor) {
+  const exactPct = Math.round(((stats.exactos || 0) / Math.max(stats.total || 1, 1)) * 100);
+  const estimatedPct = Math.round(((stats.estimados || 0) / Math.max(stats.total || 1, 1)) * 100);
+  const schemaColumns = Array.isArray((formularioSchema as any).columns) ? (formularioSchema as any).columns as string[] : [];
+  const variableGroups = [
+    {
+      title: 'Identificación, ubicación y trazabilidad territorial',
+      fields: schemaColumns.filter((item) => /Fecha de aplicación|UPZ|Barrio|Lugar específico|Latitud|Longitud|Calidad del punto geográfico/i.test(item)).slice(0, 6),
+    },
+    {
+      title: 'Tipología de oferta, productos y servicios',
+      fields: schemaColumns.filter((item) => /Tipo principal de emprendimiento|Servicios|Producto turístico|Segmentos de mercado|Público objetivo|Idiomas/i.test(item)).slice(0, 6),
+    },
+    {
+      title: 'Infraestructura, formalización y capacidades',
+      fields: schemaColumns.filter((item) => /sede física|Conectividad|baños|registro mercantil|RNT|RUT|facturación|sostenibilidad/i.test(item)).slice(0, 8),
+    },
+  ];
+
+  cursor = drawParagraph(cursor, 'El instrumento de caracterización consolida variables de identificación territorial, tipología empresarial, capacidades operativas, formalización, empleo, sostenibilidad, mercado y evidencia de soporte. Su diseño permite lecturas descriptivas del ecosistema, cruces operativos para priorización institucional y seguimiento periódico del avance del proyecto.', {
+    size: 9.25,
+    lineHeight: 13,
+    font: fonts.regular,
+    color: INK,
+    justify: true,
+  }, newPage);
+
+  cursor = subTitle(cursor, 'Universo y muestra observada', fonts, newPage);
+  cursor = drawTable(cursor, [
+    { campo: 'Total encuestado', valor: `${stats.total || 0} registros consolidados` },
+    { campo: 'Cobertura geográfica', valor: 'Localidad de Santa Fe, Bogotá D.C. (barrios y UPZ con presencia en la base)' },
+    { campo: 'Periodo de recolección', valor: `${stats.fechaInicio || 'N/D'} - ${stats.fechaFin || 'N/D'}` },
+    { campo: 'Interés en rutas turísticas', valor: `${stats.rutas || 0} emprendimientos` },
+  ], createColumns([
+    { label: 'Campo', width: 170, value: (row: any) => row.campo },
+    { label: 'Valor', width: 290, value: (row: any) => row.valor },
+  ]), fonts, newPage);
+
+  cursor = subTitle(cursor, 'Variables y categorías empleadas', fonts, newPage);
+  variableGroups.forEach((group) => {
+    cursor = drawParagraph(cursor, `${group.title}: ${group.fields.join('; ') || 'variables presentes en el esquema, pendientes de listar automáticamente.'}`, {
+      size: 8.75,
+      lineHeight: 12,
+      font: fonts.regular,
+      color: INK,
+      justify: true,
+    }, newPage);
+  });
+
+  cursor = subTitle(cursor, 'Notas de calidad del dato', fonts, newPage);
+  cursor = drawTable(cursor, [
+    { criterio: 'Georreferenciación exacta', valor: `${stats.exactos || 0} registros`, pct: `${exactPct}%` },
+    { criterio: 'Georreferenciación estimada por centroide', valor: `${stats.estimados || 0} registros`, pct: `${estimatedPct}%` },
+    { criterio: 'Completitud declarada', valor: `${stats.tasaCompletitud ?? 0}%`, pct: 'Índice agregado' },
+  ], createColumns([
+    { label: 'Criterio', width: 240, value: (row: any) => row.criterio },
+    { label: 'Valor', width: 120, value: (row: any) => row.valor, align: 'center' },
+    { label: 'Participación', width: 100, value: (row: any) => row.pct, align: 'center' },
+  ]), fonts, newPage);
+
+  cursor = subTitle(cursor, 'Limitaciones reconocidas', fonts, newPage);
+  cursor = drawBulletList(cursor, [
+    'La base es autorreportada y algunas variables admiten selección múltiple, por lo que varias métricas expresan intensidad declarada y no exclusividad.',
+    'La georreferenciación estimada mejora cobertura espacial, pero reduce precisión para análisis microterritoriales cuando no existe coordenada puntual.',
+    'No todas las dimensiones están desagregadas por tipo de actor, por lo que algunos cruces solo pueden interpretarse a nivel agregado.',
+  ], fonts, newPage);
+
+  return cursor;
+}
+
+function buildTraceabilityRows(stats: StatsInput) {
+  const total = Math.max(stats.total || 0, 1);
+  const empleoTotal = (stats.empleo?.totalFormales ?? 0) + (stats.empleo?.totalInformales ?? 0);
+  return [
+    { indicador: 'Registros analizados', formula: 'Conteo total consolidado', variable: 'stats.total', validos: stats.total || 0 },
+    { indicador: 'Interés en rutas turísticas', formula: 'stats.rutas / stats.total * 100', variable: 'stats.rutas, stats.total', validos: stats.total || 0 },
+    { indicador: 'Georreferenciación exacta', formula: 'stats.exactos / stats.total * 100', variable: 'stats.exactos, stats.total', validos: stats.total || 0 },
+    { indicador: 'Georreferenciación estimada', formula: 'stats.estimados / stats.total * 100', variable: 'stats.estimados, stats.total', validos: stats.total || 0 },
+    { indicador: 'Registro mercantil', formula: 'stats.formalizacion.pctRegistroMercantil', variable: 'stats.formalizacion.pctRegistroMercantil', validos: stats.formalizacion ? total : 0 },
+    { indicador: 'Registro Nacional de Turismo (RNT)', formula: 'stats.formalizacion.pctRNT', variable: 'stats.formalizacion.pctRNT', validos: stats.formalizacion ? total : 0 },
+    { indicador: 'RUT', formula: 'stats.formalizacion.pctRUT', variable: 'stats.formalizacion.pctRUT', validos: stats.formalizacion ? total : 0 },
+    { indicador: 'Facturación electrónica', formula: 'stats.formalizacion.pctFacturacionElectronica', variable: 'stats.formalizacion.pctFacturacionElectronica', validos: stats.formalizacion ? total : 0 },
+    { indicador: 'Sede física', formula: 'stats.infraestructura.pctSedeFisica', variable: 'stats.infraestructura.pctSedeFisica', validos: stats.infraestructura ? total : 0 },
+    { indicador: 'Conectividad a internet', formula: 'stats.infraestructura.pctConectividad', variable: 'stats.infraestructura.pctConectividad', validos: stats.infraestructura ? total : 0 },
+    { indicador: 'Formalidad del empleo', formula: 'stats.empleo.totalFormales / (formales + informales) * 100', variable: 'stats.empleo.totalFormales, stats.empleo.totalInformales', validos: empleoTotal },
+    { indicador: 'Tasa de completitud', formula: 'stats.tasaCompletitud', variable: 'stats.tasaCompletitud, stats.completitudDist', validos: stats.total || 0 },
+  ].filter((row) => row.validos > 0 || row.indicador === 'Registros analizados').slice(0, 10);
+}
+
+function renderTraceabilitySection(cursor: Cursor, stats: StatsInput, fonts: Fonts, newPage: (title: string) => Cursor) {
+  cursor = drawParagraph(cursor, 'La siguiente matriz relaciona indicadores clave del informe con su fórmula de cálculo, la variable agregada de origen y el volumen de registros válidos utilizado en la síntesis estadística.', {
+    size: 9.25,
+    lineHeight: 13,
+    font: fonts.regular,
+    color: INK,
+    justify: true,
+  }, newPage);
+  cursor = drawTable(cursor, buildTraceabilityRows(stats), createColumns([
+    { label: 'Indicador', width: 140, value: (row: any) => row.indicador },
+    { label: 'Fórmula', width: 160, value: (row: any) => row.formula },
+    { label: 'Variable origen', width: 120, value: (row: any) => row.variable },
+    { label: 'Registros válidos (n)', width: 80, value: (row: any) => String(row.validos), align: 'center' },
+  ]), fonts, newPage);
+  return cursor;
+}
+
 function parseSummary(summary: string) {
   return safe(summary).split('\n').map((line) => line.trimEnd());
 }
@@ -539,19 +740,17 @@ function drawCover(cover: PDFPage, fonts: Fonts, stats: StatsInput, updatedAt: s
 }
 
 async function drawMapBox(pdfDoc: PDFDocument, cursor: Cursor, stats: StatsInput, fonts: Fonts, logs: string[], newPage: (title: string) => Cursor) {
-  cursor = ensureSpace(cursor, 320, newPage);
+  cursor = ensureSpace(cursor, 400, newPage);
   const x = PAGE_MARGIN_X;
-  const height = 280;
+  const height = 360;
   const y = cursor.y - height;
   cursor.page.drawRectangle({ x, y, width: CONTENT_W, height, color: MIST, borderColor: LINE, borderWidth: 1 });
 
   try {
-    // Load GeoJSON
     const geoPath = path.join(process.cwd(), 'public', 'geo', 'santafe-barrios.geojson');
     const geoRaw = await fs.readFile(geoPath, 'utf-8');
     const geojson = JSON.parse(geoRaw);
 
-    // Build barrio data from stats
     const barrioData: BarrioData[] = (stats.avanceBarrio ?? []).map((b: any) => ({
       nombre: b.nombre,
       cantidad: b.cantidad,
@@ -559,32 +758,31 @@ async function drawMapBox(pdfDoc: PDFDocument, cursor: Cursor, stats: StatsInput
       pctRegistroMercantil: b.pctRegistroMercantil,
     }));
 
-    // Build SVG using light theme for print
-    const svgString = buildSantaFeSvgMap(geojson, {
+    const { svgString, labels } = buildMapSvgGeometry(geojson, {
       theme: 'light',
       width: CONTENT_W,
       height,
       barrios: barrioData,
     });
 
-    // Rasterise SVG to PNG using sharp if available, otherwise embed as placeholder
     let pngBytes: Uint8Array | null = null;
     try {
       const sharp = (await import('sharp')).default;
       const buf = await sharp(Buffer.from(svgString)).png({ quality: 100 }).toBuffer();
       pngBytes = new Uint8Array(buf);
     } catch {
-      logs.push('map: sharp not available, embedding SVG as placeholder text');
+      logs.push('map: sharp not available, using label-only fallback');
     }
 
     if (pngBytes) {
       const image = await pdfDoc.embedPng(pngBytes);
       drawImageCover(cursor.page, image, x, y, CONTENT_W, height);
+      drawMapLabels(cursor.page, labels, fonts, { x, y, width: CONTENT_W, height, svgWidth: CONTENT_W, svgHeight: height });
       logs.push('map: SVG rasterised and embedded as PNG');
     } else {
-      // Fallback: draw a styled placeholder
       drawText(cursor.page, 'Mapa territorial de Santa Fe', { x: x + spacingScale.lg, y: y + height - 28, size: 14, font: fonts.bold, color: FOREST });
       drawText(cursor.page, `Barrios: ${geojson.features?.length ?? 0} · Encuestas: ${stats.total ?? 0}`, { x: x + spacingScale.lg, y: y + height - 50, size: 10, font: fonts.regular, color: SLATE });
+      drawMapLabels(cursor.page, labels, fonts, { x, y, width: CONTENT_W, height, svgWidth: CONTENT_W, svgHeight: height });
     }
   } catch (error) {
     logs.push(`map embed failed: ${error instanceof Error ? error.message : 'unknown'}`);
@@ -607,6 +805,7 @@ export async function generatePdfReport(payload: PdfReportPayload): Promise<PdfB
   const stats: StatsInput = payload.stats ?? { total: 0, rutas: 0, exactos: 0, estimados: 0 };
   const summary = payload.summary?.trim() ? payload.summary : buildFallbackSummary(stats);
   const updatedAt = payload.updatedAt ?? new Date().toLocaleString('es-CO');
+  const reportType = payload.reportType ?? 'diagnostico';
   const pdfDoc = await PDFDocument.create();
   const fonts = await loadFonts(pdfDoc, logs);
   const analysis = buildDeterministicAnalysis(stats);
@@ -631,7 +830,6 @@ export async function generatePdfReport(payload: PdfReportPayload): Promise<PdfB
     const interiorIndex = pageCount >= 2 ? 1 : 0;
     const [interiorEmbedded] = await pdfDoc.embedPdf(templateDoc, [interiorIndex]);
     templatePages.interior = interiorEmbedded;
-    // Stamp letterhead as background on cover and toc pages
     cover.drawPage(coverEmbedded, { x: 0, y: 0, width: PAGE_W, height: PAGE_H });
     tocPage.drawPage(interiorEmbedded, { x: 0, y: 0, width: PAGE_W, height: PAGE_H });
     logs.push(`letterhead: loaded (${pageCount} page${pageCount > 1 ? 's' : ''})`);
@@ -639,53 +837,41 @@ export async function generatePdfReport(payload: PdfReportPayload): Promise<PdfB
     logs.push(`letterhead: could not load — ${err instanceof Error ? err.message : 'unknown error'}`);
   }
 
-  // Draw cover content AFTER the letterhead is stamped so content appears on top
   drawCover(cover, fonts, stats, updatedAt, summary);
 
   const newPage = createPageFactory(pdfDoc, pageTitles, templatePages);
+  const sectionDefs = getSectionsForReportType(reportType);
+  const labelFor = (id: string) => sectionDefs.find((section) => section.id === id)?.label ?? id;
   const startSection = (label: string) => {
     const cursor = newPage(label);
     tocItems.push({ label, pageNumber: pdfDoc.getPageCount() });
     return sectionTitle(cursor, label.toUpperCase(), fonts, newPage);
   };
 
-  const sectionLabels = [
-    '1. Resumen ejecutivo',
-    '2. Contexto territorial',
-    '3. Mapa territorial',
-    '4. Metodología y hallazgos clave',
-    '5. Concentración y lectura geográfica',
-    '6. Formalización e infraestructura',
-    '7. Empleo e índice de madurez',
-    '8. Mercado, capacidades y sostenibilidad',
-    (stats.byFecha?.length || stats.topEncuestadores?.length || stats.completitudDist?.length) ? '9. Recolección y calidad de datos' : null,
-    '10. Brechas y recomendaciones',
-    '11. Anexo técnico y glosario',
-    '12. Créditos fotográficos',
-  ].filter(Boolean) as string[];
+  const contextImages = santafeImages.slice(0, 2);
+  const section5Images = santafeImages.slice(2, 3);
+  const section8Images = santafeImages.slice(3, 4);
+  const creditImages = santafeImages.slice(4);
 
-  let sectionIndex = 0;
-  let cursor = startSection(sectionLabels[sectionIndex++]);
+  let cursor = startSection(labelFor('resumen-ejecutivo'));
   cursor = renderSummary(cursor, parseSummary(summary), fonts, newPage);
 
-  // 2. Contexto territorial — real images embedded in their thematic section
-  cursor = startSection(sectionLabels[sectionIndex++]);
-  for (const image of santafeImages) cursor = await drawContextImageCard(pdfDoc, cursor, image, fonts, logs, newPage);
+  cursor = startSection(labelFor('contexto-territorial'));
+  for (const image of contextImages) cursor = await drawContextImageCard(pdfDoc, cursor, image, fonts, logs, newPage);
 
-  // 3. Mapa territorial — SVG map generated server-side (no html2canvas)
-  cursor = startSection(sectionLabels[sectionIndex++]);
+  cursor = startSection(labelFor('mapa-territorial'));
   cursor = drawInfoBox(cursor, 'Interpretación del mapa', [
     `El mapa territorial combina ${stats.exactos || 0} puntos exactos y ${stats.estimados || 0} puntos estimados por centroide de barrio.`,
     analysis.concentration.paragraph,
   ], fonts, newPage);
   cursor = await drawMapBox(pdfDoc, cursor, stats, fonts, logs, newPage);
 
-  cursor = startSection(sectionLabels[sectionIndex++]);
+  cursor = startSection(labelFor('metodologia-hallazgos'));
   cursor = drawInfoBox(cursor, analysis.methodology.title, analysis.methodology.paragraphs, fonts, newPage);
   cursor = subTitle(cursor, 'Hallazgos clave cuantificados', fonts, newPage);
   cursor = drawBulletList(cursor, analysis.hallazgos.slice(0, 8), fonts, newPage);
 
-  cursor = startSection(sectionLabels[sectionIndex++]);
+  cursor = startSection(labelFor('concentracion-geografica'));
   analysis.narratives.geography.forEach((paragraph) => {
     cursor = drawParagraph(cursor, paragraph, { size: 9.25, lineHeight: 13, font: fonts.regular, color: INK, justify: true }, newPage);
   });
@@ -708,8 +894,9 @@ export async function generatePdfReport(payload: PdfReportPayload): Promise<PdfB
       { label: '% del total', width: 122, value: (row: any) => `${Math.round((row.value / Math.max(stats.total || 1, 1)) * 100)}%`, align: 'center' },
     ]), fonts, newPage);
   }
+  for (const image of section5Images) cursor = await drawContextImageCard(pdfDoc, cursor, image, fonts, logs, newPage);
 
-  cursor = startSection(sectionLabels[sectionIndex++]);
+  cursor = startSection(labelFor('formalizacion-infraestructura'));
   [...analysis.narratives.formalization, ...analysis.narratives.infrastructure].forEach((paragraph) => {
     cursor = drawParagraph(cursor, paragraph, { size: 9.25, lineHeight: 13, font: fonts.regular, color: INK, justify: true }, newPage);
   });
@@ -737,7 +924,7 @@ export async function generatePdfReport(payload: PdfReportPayload): Promise<PdfB
     ].forEach(([label, value]) => { cursor = drawPercentBar(cursor, String(label), Number(value), fonts, newPage); });
   }
 
-  cursor = startSection(sectionLabels[sectionIndex++]);
+  cursor = startSection(labelFor('empleo-madurez'));
   analysis.narratives.employment.forEach((paragraph) => {
     cursor = drawParagraph(cursor, paragraph, { size: 9.25, lineHeight: 13, font: fonts.regular, color: INK, justify: true }, newPage);
   });
@@ -770,7 +957,7 @@ export async function generatePdfReport(payload: PdfReportPayload): Promise<PdfB
     ]), fonts, newPage);
   }
 
-  cursor = startSection(sectionLabels[sectionIndex++]);
+  cursor = startSection(labelFor('mercado-capacidades'));
   [...analysis.narratives.market, ...analysis.narratives.sustainability, ...analysis.narratives.capacities].forEach((paragraph) => {
     cursor = drawParagraph(cursor, paragraph, { size: 9.25, lineHeight: 13, font: fonts.regular, color: INK, justify: true }, newPage);
   });
@@ -792,33 +979,41 @@ export async function generatePdfReport(payload: PdfReportPayload): Promise<PdfB
     const maxValue = Math.max(...sustainabilityList.map((item) => item.value), 1);
     sustainabilityList.slice(0, 8).forEach((item) => { cursor = drawMiniBar(cursor, item.name, item.value, maxValue, fonts, newPage); });
   }
+  for (const image of section8Images) cursor = await drawContextImageCard(pdfDoc, cursor, image, fonts, logs, newPage);
 
-  if ((stats.byFecha?.length ?? 0) > 0 || (stats.topEncuestadores?.length ?? 0) > 0 || (stats.completitudDist?.length ?? 0) > 0) {
-    cursor = startSection(sectionLabels[sectionIndex++]);
-    if ((stats.topEncuestadores?.length ?? 0) > 0) {
-      cursor = subTitle(cursor, 'Encuestas por encuestador/a', fonts, newPage);
-      cursor = drawTable(cursor, stats.topEncuestadores ?? [], createColumns([
-        { label: 'Encuestador/a', width: 250, value: (row: any) => row.name },
-        { label: 'Encuestas', width: 90, value: (row: any) => String(row.value), align: 'center' },
-        { label: '% del total', width: 120, value: (row: any) => `${Math.round((row.value / Math.max(stats.total || 1, 1)) * 100)}%`, align: 'center' },
-      ]), fonts, newPage);
-    }
-    if ((stats.byFecha?.length ?? 0) > 0) {
-      cursor = subTitle(cursor, 'Serie diaria de recolección', fonts, newPage);
-      const maxValue = Math.max(...(stats.byFecha ?? []).map((item) => item.value), 1);
-      (stats.byFecha ?? []).forEach((item) => { cursor = drawMiniBar(cursor, item.fecha, item.value, maxValue, fonts, newPage); });
-    }
-    if ((stats.completitudDist?.length ?? 0) > 0) {
-      cursor = subTitle(cursor, 'Estados de completitud', fonts, newPage);
-      cursor = drawTable(cursor, stats.completitudDist ?? [], createColumns([
-        { label: 'Estado', width: 280, value: (row: any) => row.name },
-        { label: 'Registros', width: 90, value: (row: any) => String(row.value), align: 'center' },
-        { label: '% del total', width: 90, value: (row: any) => `${Math.round((row.value / Math.max(stats.total || 1, 1)) * 100)}%`, align: 'center' },
-      ]), fonts, newPage);
-    }
+  cursor = startSection(labelFor('recoleccion-calidad'));
+  if ((stats.topEncuestadores?.length ?? 0) > 0) {
+    cursor = subTitle(cursor, 'Encuestas por encuestador/a', fonts, newPage);
+    cursor = drawTable(cursor, stats.topEncuestadores ?? [], createColumns([
+      { label: 'Encuestador/a', width: 250, value: (row: any) => row.name },
+      { label: 'Encuestas', width: 90, value: (row: any) => String(row.value), align: 'center' },
+      { label: '% del total', width: 120, value: (row: any) => `${Math.round((row.value / Math.max(stats.total || 1, 1)) * 100)}%`, align: 'center' },
+    ]), fonts, newPage);
+  }
+  if ((stats.byFecha?.length ?? 0) > 0) {
+    cursor = subTitle(cursor, 'Serie diaria de recolección', fonts, newPage);
+    const maxValue = Math.max(...(stats.byFecha ?? []).map((item) => item.value), 1);
+    (stats.byFecha ?? []).forEach((item) => { cursor = drawMiniBar(cursor, item.fecha, item.value, maxValue, fonts, newPage); });
+  }
+  if ((stats.completitudDist?.length ?? 0) > 0) {
+    cursor = subTitle(cursor, 'Estados de completitud', fonts, newPage);
+    cursor = drawTable(cursor, stats.completitudDist ?? [], createColumns([
+      { label: 'Estado', width: 280, value: (row: any) => row.name },
+      { label: 'Registros', width: 90, value: (row: any) => String(row.value), align: 'center' },
+      { label: '% del total', width: 90, value: (row: any) => `${Math.round((row.value / Math.max(stats.total || 1, 1)) * 100)}%`, align: 'center' },
+    ]), fonts, newPage);
+  }
+  if ((stats.byFecha?.length ?? 0) === 0 && (stats.topEncuestadores?.length ?? 0) === 0 && (stats.completitudDist?.length ?? 0) === 0) {
+    cursor = drawParagraph(cursor, 'La base analizada no incluye desagregaciones suficientes de cronología de levantamiento, responsables de campo o estados de completitud para ampliar esta sección en la presente edición.', {
+      size: 9.25,
+      lineHeight: 13,
+      font: fonts.regular,
+      color: INK,
+      justify: true,
+    }, newPage);
   }
 
-  cursor = startSection(sectionLabels[sectionIndex++]);
+  cursor = startSection(labelFor('brechas-recomendaciones'));
   cursor = subTitle(cursor, 'Brechas y riesgos principales', fonts, newPage);
   cursor = drawBulletList(cursor, analysis.brechasYRiesgos, fonts, newPage);
   cursor = subTitle(cursor, 'Recomendaciones priorizadas', fonts, newPage);
@@ -828,7 +1023,7 @@ export async function generatePdfReport(payload: PdfReportPayload): Promise<PdfB
     { label: 'Indicador sugerido', width: 170, value: (row: any) => row.indicator },
   ]), fonts, newPage);
 
-  cursor = startSection(sectionLabels[sectionIndex++]);
+  cursor = startSection(labelFor('anexo-tecnico'));
   cursor = subTitle(cursor, 'Ficha técnica resumida', fonts, newPage);
   cursor = drawTable(cursor, analysis.methodology.technicalSheet, createColumns([
     { label: 'Campo', width: 180, value: (row: any) => row.label },
@@ -849,13 +1044,27 @@ export async function generatePdfReport(payload: PdfReportPayload): Promise<PdfB
     }, newPage);
   });
 
-  cursor = startSection(sectionLabels[sectionIndex++]);
-  cursor = drawTable(cursor, santafeImages, createColumns([
+  cursor = startSection(labelFor('creditos-fotograficos'));
+  const imageCredits = creditImages.length ? creditImages : santafeImages;
+  for (const image of creditImages) cursor = await drawContextImageCard(pdfDoc, cursor, image, fonts, logs, newPage);
+  cursor = drawTable(cursor, imageCredits, createColumns([
     { label: 'Tema', width: 118, value: (row: any) => row.title },
     { label: 'Autor / crédito', width: 148, value: (row: any) => row.credit },
     { label: 'Fuente', width: 112, value: (row: any) => row.source },
     { label: 'Licencia', width: 82, value: (row: any) => row.license },
   ]), fonts, newPage);
+
+  cursor = startSection(labelFor('caracterizacion-actores'));
+  cursor = renderActorCharacterizationSection(cursor, stats, fonts, newPage);
+
+  cursor = startSection(labelFor('tendencias-oportunidades'));
+  cursor = renderOpportunitiesSection(cursor, stats, analysis, fonts, newPage);
+
+  cursor = startSection(labelFor('ficha-metodologica-ampliada'));
+  cursor = renderExpandedMethodologySection(cursor, stats, fonts, newPage);
+
+  cursor = startSection(labelFor('anexo-trazabilidad'));
+  cursor = renderTraceabilitySection(cursor, stats, fonts, newPage);
 
   const totalPages = pdfDoc.getPageCount();
   const pages = pdfDoc.getPages();
