@@ -5,6 +5,7 @@ import {
   PDFDocument,
   PDFPage,
   PDFFont,
+  PDFEmbeddedPage,
   StandardFonts,
   clip,
   endPath,
@@ -17,11 +18,13 @@ import {
 import { buildDeterministicAnalysis, buildFallbackSummary, sanitizePdfText, type StatsInput } from './analysis';
 import { colorHex, spacingScale, typeScale } from './designTokens';
 import { santafeImages, type SantafeImage } from './santafeImages';
+import { buildSantaFeSvgMap, type BarrioData } from './mapSvg';
 
 export type PdfReportPayload = {
   stats?: StatsInput;
   summary?: string;
   updatedAt?: string;
+  /** @deprecated mapImageBase64 is no longer used; the map is generated as SVG server-side */
   mapImageBase64?: string;
 };
 
@@ -39,11 +42,17 @@ type PdfBuildResult = {
 const PAGE_W = 612;
 const PAGE_H = 792;
 const PAGE_MARGIN_X = spacingScale.xxxl;
-const HEADER_H = 40;
-const FOOTER_H = 34;
+
+// ─── Letterhead safe zones ────────────────────────────────────────────────
+// MEMBRETE-FUNDESCO.pdf has an institutional header (~80 px) and footer (~60 px).
+// CONTENT_TOP and CONTENT_BOTTOM leave generous clearance so no content ever
+// overlaps the letterhead, watermark, logos or institutional footer.
+const TEMPLATE_HEADER_SAFE_H = 90;  // pixels from top edge reserved for letterhead header
+const TEMPLATE_FOOTER_SAFE_H = 68;  // pixels from bottom edge reserved for letterhead footer
+
 const CONTENT_W = PAGE_W - PAGE_MARGIN_X * 2;
-const CONTENT_TOP = PAGE_H - HEADER_H - spacingScale.xl;
-const CONTENT_BOTTOM = FOOTER_H + spacingScale.xl;
+const CONTENT_TOP = PAGE_H - TEMPLATE_HEADER_SAFE_H - spacingScale.sm;
+const CONTENT_BOTTOM = TEMPLATE_FOOTER_SAFE_H + spacingScale.sm;
 const IMAGE_BOX_H = 164;
 const TABLE_FONT_SIZE = 8.5;
 const TABLE_LINE_H = 11;
@@ -129,26 +138,16 @@ function createColumns<T>(columns: Array<Omit<TableColumn<T>, 'width'> & { width
   return columns;
 }
 
-function drawHeader(page: PDFPage, title: string, fonts: Fonts) {
-  const brand = 'FUNDESCO · Observatorio Turístico Santa Fe';
-  page.drawRectangle({ x: 0, y: PAGE_H - HEADER_H, width: PAGE_W, height: HEADER_H, color: FOREST });
-  const brandSize = 9;
-  const titleSize = 10;
-  const brandW = fonts.bold.widthOfTextAtSize(brand, brandSize);
-  const titleMaxW = Math.max(96, CONTENT_W - brandW - spacingScale.xxl);
-  const safeTitle = truncateToWidth(title, titleMaxW, fonts.bold, titleSize);
-  const titleW = fonts.bold.widthOfTextAtSize(safeTitle, titleSize);
-  drawText(page, brand, { x: PAGE_MARGIN_X, y: PAGE_H - 24, size: brandSize, font: fonts.bold, color: LIME });
-  drawText(page, safeTitle, { x: PAGE_W - PAGE_MARGIN_X - titleW, y: PAGE_H - 24, size: titleSize, font: fonts.bold, color: PAPER });
+function drawPageNumber(page: PDFPage, fonts: Fonts, pageNumber: number, totalPages: number) {
+  // Only page number is drawn — the letterhead provides the full header/footer decoration
+  const pageLabel = `Página ${pageNumber} de ${totalPages}`;
+  const pageW = fonts.bold.widthOfTextAtSize(pageLabel, 8);
+  drawText(page, pageLabel, { x: PAGE_W - PAGE_MARGIN_X - pageW, y: TEMPLATE_FOOTER_SAFE_H - 16, size: 8, font: fonts.bold, color: SLATE });
 }
 
-function drawFooter(page: PDFPage, fonts: Fonts, pageNumber: number, totalPages: number) {
-  const label = 'Fundesco Santa Fe · Observatorio Turístico · Documento de trabajo';
-  const pageLabel = `Pág. ${pageNumber} de ${totalPages}`;
-  page.drawRectangle({ x: 0, y: 0, width: PAGE_W, height: FOOTER_H, color: FOREST });
-  drawText(page, truncateToWidth(label, CONTENT_W - 88, fonts.regular, 8), { x: PAGE_MARGIN_X, y: 13, size: 8, font: fonts.regular, color: PAPER });
-  const pageW = fonts.bold.widthOfTextAtSize(pageLabel, 8.5);
-  drawText(page, pageLabel, { x: PAGE_W - PAGE_MARGIN_X - pageW, y: 12.5, size: 8.5, font: fonts.bold, color: LIME });
+function drawSectionLabel(page: PDFPage, title: string, fonts: Fonts) {
+  const safeTitle = truncateToWidth(title, CONTENT_W - 80, fonts.regular, 8);
+  drawText(page, safeTitle, { x: PAGE_MARGIN_X, y: TEMPLATE_FOOTER_SAFE_H - 16, size: 8, font: fonts.regular, color: MUTED });
 }
 
 function sectionTitle(cursor: Cursor, text: string, fonts: Fonts, newPage: (title: string) => Cursor) {
@@ -488,66 +487,112 @@ async function loadFonts(pdfDoc: PDFDocument, logs: string[]): Promise<Fonts> {
   }
 }
 
-function createPageFactory(pdfDoc: PDFDocument, pageTitles: Map<PDFPage, string>) {
+function createPageFactory(pdfDoc: PDFDocument, pageTitles: Map<PDFPage, string>, templatePages: { cover?: PDFEmbeddedPage; interior?: PDFEmbeddedPage }) {
   return (title: string): Cursor => {
     const page = pdfDoc.addPage([PAGE_W, PAGE_H]);
     pageTitles.set(page, title);
+    // Stamp interior letterhead as background before any content
+    if (templatePages.interior) {
+      page.drawPage(templatePages.interior, { x: 0, y: 0, width: PAGE_W, height: PAGE_H });
+    }
     return { page, y: CONTENT_TOP, title };
   };
 }
 
 function drawCover(cover: PDFPage, fonts: Fonts, stats: StatsInput, updatedAt: string, summary: string) {
-  cover.drawRectangle({ x: 0, y: 0, width: PAGE_W, height: PAGE_H, color: CREAM });
-  cover.drawRectangle({ x: 0, y: PAGE_H - 232, width: PAGE_W, height: 232, color: FOREST });
-  cover.drawRectangle({ x: 0, y: PAGE_H - 240, width: PAGE_W, height: 8, color: LIME });
-  drawText(cover, 'FUNDESCO', { x: PAGE_MARGIN_X, y: PAGE_H - 56, size: typeScale.sm, font: fonts.bold, color: LIME });
-  drawText(cover, 'Observatorio Turístico de Santa Fe', { x: PAGE_MARGIN_X, y: PAGE_H - 84, size: typeScale.xl, font: fonts.bold, color: PAPER });
-  drawText(cover, 'Informe ampliado de caracterización territorial y madurez del ecosistema turístico', { x: PAGE_MARGIN_X, y: PAGE_H - 110, size: typeScale.sm, font: fonts.regular, color: PAPER });
-  drawText(cover, `Corte: ${updatedAt}`, { x: PAGE_MARGIN_X, y: PAGE_H - 132, size: typeScale.xs, font: fonts.regular, color: PAPER });
+  // The letterhead is already stamped as background. Draw content within the safe area.
+  const titleY = CONTENT_TOP;
+  drawText(cover, 'Observatorio Turístico de Santa Fe', { x: PAGE_MARGIN_X, y: titleY, size: typeScale.xl, font: fonts.bold, color: FOREST });
+  drawText(cover, 'Informe de caracterización territorial y madurez del ecosistema turístico', { x: PAGE_MARGIN_X, y: titleY - 22, size: typeScale.sm, font: fonts.regular, color: SLATE });
+  drawText(cover, `Corte: ${updatedAt}`, { x: PAGE_MARGIN_X, y: titleY - 40, size: typeScale.xs, font: fonts.regular, color: MUTED });
 
-  cover.drawRectangle({ x: PAGE_MARGIN_X, y: PAGE_H - 366, width: CONTENT_W, height: 114, color: PAPER, borderColor: LINE, borderWidth: 1.2 });
-  cover.drawRectangle({ x: PAGE_MARGIN_X, y: PAGE_H - 272, width: CONTENT_W, height: 20, color: GREEN });
-  drawText(cover, 'Resumen ejecutivo del periodo', { x: PAGE_MARGIN_X + spacingScale.sm, y: PAGE_H - 267, size: 9.5, font: fonts.bold, color: PAPER });
+  // Executive summary box
+  const boxTop = titleY - 60;
+  const boxH = 130;
+  const boxBottom = boxTop - boxH;
+  cover.drawRectangle({ x: PAGE_MARGIN_X, y: boxBottom, width: CONTENT_W, height: boxH, color: PAPER, borderColor: LINE, borderWidth: 1.2 });
+  cover.drawRectangle({ x: PAGE_MARGIN_X, y: boxTop - 20, width: CONTENT_W, height: 20, color: GREEN });
+  drawText(cover, 'Resumen ejecutivo del periodo', { x: PAGE_MARGIN_X + spacingScale.sm, y: boxTop - 15, size: 9.5, font: fonts.bold, color: PAPER });
+
   [
     ['Periodo de recolección', `${stats.fechaInicio || 'N/D'} - ${stats.fechaFin || 'N/D'}`],
     ['Registros analizados', String(stats.total ?? 0)],
     ['Interés en rutas', `${stats.rutas ?? 0} emprendimientos`],
     ['Georreferenciación exacta', `${stats.exactos ?? 0}`],
   ].forEach(([label, value], index) => {
-    const y = PAGE_H - 292 - index * 18;
-    drawText(cover, `${label}:`, { x: PAGE_MARGIN_X + spacingScale.sm, y, size: 9, font: fonts.bold, color: FOREST });
-    drawText(cover, value, { x: PAGE_MARGIN_X + 190, y, size: 9, font: fonts.regular, color: INK });
+    const y = boxTop - 38 - index * 18;
+    if (y > boxBottom + 4) {
+      drawText(cover, `${label}:`, { x: PAGE_MARGIN_X + spacingScale.sm, y, size: 9, font: fonts.bold, color: FOREST });
+      drawText(cover, value, { x: PAGE_MARGIN_X + 190, y, size: 9, font: fonts.regular, color: INK });
+    }
   });
 
+  // Summary text below the box
   const summaryLines = wrapToWidth(summary.replace(/\n+/g, ' '), CONTENT_W, fonts.regular, 10).slice(0, 4);
-  let y = PAGE_H - 404;
+  let y = boxBottom - 20;
   summaryLines.forEach((line) => {
-    drawText(cover, line, { x: PAGE_MARGIN_X, y, size: 10, font: fonts.regular, color: SLATE });
-    y -= 14;
+    if (y > CONTENT_BOTTOM) {
+      drawText(cover, line, { x: PAGE_MARGIN_X, y, size: 10, font: fonts.regular, color: SLATE });
+      y -= 14;
+    }
   });
-
-  cover.drawRectangle({ x: 0, y: 0, width: PAGE_W, height: FOOTER_H, color: FOREST });
-  drawText(cover, 'Sistema de monitoreo Fundesco · Muestra automática para validación visual', { x: PAGE_MARGIN_X, y: 13, size: 8, font: fonts.regular, color: PAPER });
 }
 
-async function drawMapBox(pdfDoc: PDFDocument, cursor: Cursor, mapImageBase64: string, fonts: Fonts, logs: string[], newPage: (title: string) => Cursor) {
+async function drawMapBox(pdfDoc: PDFDocument, cursor: Cursor, stats: StatsInput, fonts: Fonts, logs: string[], newPage: (title: string) => Cursor) {
   cursor = ensureSpace(cursor, 320, newPage);
   const x = PAGE_MARGIN_X;
   const height = 280;
   const y = cursor.y - height;
   cursor.page.drawRectangle({ x, y, width: CONTENT_W, height, color: MIST, borderColor: LINE, borderWidth: 1 });
+
   try {
-    const bytes = Buffer.from(mapImageBase64.replace(/^data:image\/\w+;base64,/, ''), 'base64');
-    const format = mapImageBase64.startsWith('data:image/png') ? 'png' : 'jpg';
-    const image = await embedImage(pdfDoc, bytes, format);
-    drawImageCover(cursor.page, image, x, y, CONTENT_W, height);
-    logs.push(`map ok: ${format}`);
+    // Load GeoJSON
+    const geoPath = path.join(process.cwd(), 'public', 'geo', 'santafe-barrios.geojson');
+    const geoRaw = await fs.readFile(geoPath, 'utf-8');
+    const geojson = JSON.parse(geoRaw);
+
+    // Build barrio data from stats
+    const barrioData: BarrioData[] = (stats.avanceBarrio ?? []).map((b: any) => ({
+      nombre: b.nombre,
+      cantidad: b.cantidad,
+      pctRNT: b.pctRNT,
+      pctRegistroMercantil: b.pctRegistroMercantil,
+    }));
+
+    // Build SVG using light theme for print
+    const svgString = buildSantaFeSvgMap(geojson, {
+      theme: 'light',
+      width: CONTENT_W,
+      height,
+      barrios: barrioData,
+    });
+
+    // Rasterise SVG to PNG using sharp if available, otherwise embed as placeholder
+    let pngBytes: Uint8Array | null = null;
+    try {
+      const sharp = (await import('sharp')).default;
+      const buf = await sharp(Buffer.from(svgString)).png({ quality: 100 }).toBuffer();
+      pngBytes = new Uint8Array(buf);
+    } catch {
+      logs.push('map: sharp not available, embedding SVG as placeholder text');
+    }
+
+    if (pngBytes) {
+      const image = await pdfDoc.embedPng(pngBytes);
+      drawImageCover(cursor.page, image, x, y, CONTENT_W, height);
+      logs.push('map: SVG rasterised and embedded as PNG');
+    } else {
+      // Fallback: draw a styled placeholder
+      drawText(cursor.page, 'Mapa territorial de Santa Fe', { x: x + spacingScale.lg, y: y + height - 28, size: 14, font: fonts.bold, color: FOREST });
+      drawText(cursor.page, `Barrios: ${geojson.features?.length ?? 0} · Encuestas: ${stats.total ?? 0}`, { x: x + spacingScale.lg, y: y + height - 50, size: 10, font: fonts.regular, color: SLATE });
+    }
   } catch (error) {
-    logs.push(`map embed failed: ${error instanceof Error ? error.message : 'unknown error'}`);
-    drawText(cursor.page, 'No fue posible incorporar la captura del mapa en esta ejecución.', { x: x + spacingScale.lg, y: y + height - 28, size: 12, font: fonts.bold, color: FOREST });
+    logs.push(`map embed failed: ${error instanceof Error ? error.message : 'unknown'}`);
+    drawText(cursor.page, 'No fue posible incorporar el mapa en esta generación.', { x: x + spacingScale.lg, y: y + height - 28, size: 12, font: fonts.bold, color: FOREST });
   }
+
   cursor.y = y - spacingScale.md;
-  cursor = drawParagraph(cursor, 'Leyenda: punto exacto = ubicación capturada en campo; punto estimado = centroide del barrio cuando no hubo coordenada válida.', {
+  cursor = drawParagraph(cursor, 'Distribución territorial de encuestas por barrio y UPZ de la Localidad de Santa Fe, Bogotá D.C. Los polígonos representan barrios según el GeoJSON oficial. La intensidad de color refleja el volumen de encuestas.', {
     size: 8,
     lineHeight: 11,
     font: fonts.regular,
@@ -569,11 +614,35 @@ export async function generatePdfReport(payload: PdfReportPayload): Promise<PdfB
   const tocItems: TocItem[] = [];
 
   const cover = pdfDoc.addPage([PAGE_W, PAGE_H]);
-  drawCover(cover, fonts, stats, updatedAt, summary);
+  pageTitles.set(cover, 'Portada');
   const tocPage = pdfDoc.addPage([PAGE_W, PAGE_H]);
   pageTitles.set(tocPage, 'Tabla de contenido');
 
-  const newPage = createPageFactory(pdfDoc, pageTitles);
+  // ─── Load letterhead template ───────────────────────────────────────────
+  // Stamp letterhead FIRST (as background), then draw content on top.
+  const templatePages: { cover?: PDFEmbeddedPage; interior?: PDFEmbeddedPage } = {};
+  try {
+    const templatePath = path.join(process.cwd(), 'public', 'brand', 'membrete-fundesco.pdf');
+    const templateBytes = await fs.readFile(templatePath);
+    const templateDoc = await PDFDocument.load(templateBytes);
+    const pageCount = templateDoc.getPageCount();
+    const [coverEmbedded] = await pdfDoc.embedPdf(templateDoc, [0]);
+    templatePages.cover = coverEmbedded;
+    const interiorIndex = pageCount >= 2 ? 1 : 0;
+    const [interiorEmbedded] = await pdfDoc.embedPdf(templateDoc, [interiorIndex]);
+    templatePages.interior = interiorEmbedded;
+    // Stamp letterhead as background on cover and toc pages
+    cover.drawPage(coverEmbedded, { x: 0, y: 0, width: PAGE_W, height: PAGE_H });
+    tocPage.drawPage(interiorEmbedded, { x: 0, y: 0, width: PAGE_W, height: PAGE_H });
+    logs.push(`letterhead: loaded (${pageCount} page${pageCount > 1 ? 's' : ''})`);
+  } catch (err) {
+    logs.push(`letterhead: could not load — ${err instanceof Error ? err.message : 'unknown error'}`);
+  }
+
+  // Draw cover content AFTER the letterhead is stamped so content appears on top
+  drawCover(cover, fonts, stats, updatedAt, summary);
+
+  const newPage = createPageFactory(pdfDoc, pageTitles, templatePages);
   const startSection = (label: string) => {
     const cursor = newPage(label);
     tocItems.push({ label, pageNumber: pdfDoc.getPageCount() });
@@ -583,7 +652,7 @@ export async function generatePdfReport(payload: PdfReportPayload): Promise<PdfB
   const sectionLabels = [
     '1. Resumen ejecutivo',
     '2. Contexto territorial',
-    payload.mapImageBase64 ? '3. Mapa territorial' : null,
+    '3. Mapa territorial',
     '4. Metodología y hallazgos clave',
     '5. Concentración y lectura geográfica',
     '6. Formalización e infraestructura',
@@ -599,21 +668,17 @@ export async function generatePdfReport(payload: PdfReportPayload): Promise<PdfB
   let cursor = startSection(sectionLabels[sectionIndex++]);
   cursor = renderSummary(cursor, parseSummary(summary), fonts, newPage);
 
+  // 2. Contexto territorial — real images embedded in their thematic section
   cursor = startSection(sectionLabels[sectionIndex++]);
-  cursor = drawInfoBox(cursor, 'Causa raíz corregida en imágenes', [
-    'La iteración anterior dejó la carpeta public/images/santafe/ y los metadatos de créditos, pero no versionó los binarios JPEG/PNG definitivos; por eso la web y el PDF caían siempre al placeholder.',
-    'Esta generación lee los archivos desde disco con process.cwd()/public, detecta el formato por magic bytes y embebe cada recurso con manejo tolerante a fallos para no interrumpir el informe.',
-  ], fonts, newPage);
   for (const image of santafeImages) cursor = await drawContextImageCard(pdfDoc, cursor, image, fonts, logs, newPage);
 
-  if (payload.mapImageBase64) {
-    cursor = startSection(sectionLabels[sectionIndex++]);
-    cursor = drawInfoBox(cursor, 'Interpretación del mapa', [
-      `El mapa territorial combina ${stats.exactos || 0} puntos exactos y ${stats.estimados || 0} puntos estimados por centroide de barrio.`,
-      analysis.concentration.paragraph,
-    ], fonts, newPage);
-    cursor = await drawMapBox(pdfDoc, cursor, payload.mapImageBase64, fonts, logs, newPage);
-  }
+  // 3. Mapa territorial — SVG map generated server-side (no html2canvas)
+  cursor = startSection(sectionLabels[sectionIndex++]);
+  cursor = drawInfoBox(cursor, 'Interpretación del mapa', [
+    `El mapa territorial combina ${stats.exactos || 0} puntos exactos y ${stats.estimados || 0} puntos estimados por centroide de barrio.`,
+    analysis.concentration.paragraph,
+  ], fonts, newPage);
+  cursor = await drawMapBox(pdfDoc, cursor, stats, fonts, logs, newPage);
 
   cursor = startSection(sectionLabels[sectionIndex++]);
   cursor = drawInfoBox(cursor, analysis.methodology.title, analysis.methodology.paragraphs, fonts, newPage);
@@ -730,10 +795,6 @@ export async function generatePdfReport(payload: PdfReportPayload): Promise<PdfB
 
   if ((stats.byFecha?.length ?? 0) > 0 || (stats.topEncuestadores?.length ?? 0) > 0 || (stats.completitudDist?.length ?? 0) > 0) {
     cursor = startSection(sectionLabels[sectionIndex++]);
-    cursor = drawInfoBox(cursor, 'Causa raíz corregida en layout', [
-      'El encabezado anterior dibujaba textos con offsets rígidos y el flujo vertical combinaba decrementos manuales (y -= 6, 10, 14), lo que provocaba solapes y espacios irregulares al crecer el contenido.',
-      'Todas las secciones de esta versión usan un único cursor descendente y ensureSpace(needed) para abrir página nueva antes de invadir el pie, el margen inferior o el contenido ya dibujado.',
-    ], fonts, newPage);
     if ((stats.topEncuestadores?.length ?? 0) > 0) {
       cursor = subTitle(cursor, 'Encuestas por encuestador/a', fonts, newPage);
       cursor = drawTable(cursor, stats.topEncuestadores ?? [], createColumns([
@@ -789,10 +850,6 @@ export async function generatePdfReport(payload: PdfReportPayload): Promise<PdfB
   });
 
   cursor = startSection(sectionLabels[sectionIndex++]);
-  cursor = drawInfoBox(cursor, 'Créditos y trazabilidad de la galería', [
-    'Cada fotografía queda versionada dentro de public/images/santafe/, acreditada también en public/images/santafe/CREDITS.md y replicada en esta página del informe.',
-    'La página de créditos existe para documentar la causa raíz corregida: el problema no estaba en pdf-lib ni en next/image, sino en la ausencia real de binarios y en el uso previo de rutas incompletas durante la exportación.',
-  ], fonts, newPage);
   cursor = drawTable(cursor, santafeImages, createColumns([
     { label: 'Tema', width: 118, value: (row: any) => row.title },
     { label: 'Autor / crédito', width: 148, value: (row: any) => row.credit },
@@ -803,13 +860,13 @@ export async function generatePdfReport(payload: PdfReportPayload): Promise<PdfB
   const totalPages = pdfDoc.getPageCount();
   const pages = pdfDoc.getPages();
   pages.forEach((page, index) => {
-    if (index === 0) return;
-    drawHeader(page, pageTitles.get(page) || 'Informe', fonts);
-    drawFooter(page, fonts, index + 1, totalPages);
+    if (index === 0) return; // cover — no page number needed
+    const title = pageTitles.get(page) || 'Informe';
+    drawPageNumber(page, fonts, index + 1, totalPages);
+    drawSectionLabel(page, title, fonts);
   });
 
-  drawHeader(tocPage, 'Tabla de contenido', fonts);
-  drawFooter(tocPage, fonts, 2, totalPages);
+  // Draw TOC content (letterhead already stamped during creation)
   let tocCursor: Cursor = { page: tocPage, y: CONTENT_TOP, title: 'Tabla de contenido' };
   drawText(tocPage, 'Tabla de contenido', { x: PAGE_MARGIN_X, y: tocCursor.y, size: typeScale.lg, font: fonts.bold, color: FOREST });
   tocCursor.y -= 10;
@@ -822,10 +879,12 @@ export async function generatePdfReport(payload: PdfReportPayload): Promise<PdfB
     const pageLabel = String(item.pageNumber);
     const pageWidth = fonts.bold.widthOfTextAtSize(pageLabel, 10);
     const pageX = PAGE_MARGIN_X + CONTENT_W - spacingScale.sm - pageWidth;
-    drawText(tocPage, truncateToWidth(item.label, CONTENT_W - pageWidth - spacingScale.xxxl, fonts.bold, 9.5), { x: PAGE_MARGIN_X + spacingScale.sm, y: tocCursor.y, size: 9.5, font: fonts.bold, color: FOREST });
+    drawText(tocPage, truncateToWidth(item.label, CONTENT_W - pageWidth - spacingScale.xxxl, fonts.bold, 9.5), { x: PAGE_MARGIN_X + spacingScale.sm, y: tocCursor.y, size: 9.5, font: fonts.bold, color: INK });
     drawText(tocPage, pageLabel, { x: pageX, y: tocCursor.y, size: 10, font: fonts.bold, color: FOREST });
     tocCursor.y -= 24;
   });
+  drawPageNumber(tocPage, fonts, 2, totalPages);
+  drawSectionLabel(tocPage, 'Tabla de contenido', fonts);
 
   logs.unshift(`pdf pages: ${totalPages}`);
   const pdfBytes = await pdfDoc.save();

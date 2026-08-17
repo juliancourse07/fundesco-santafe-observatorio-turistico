@@ -1,1 +1,37 @@
-{"name":"fundesco-santafe-dashboard","version":"1.0.0","private":true,"scripts":{"dev":"next dev","build":"next build","start":"next start","lint":"next lint","pdf:sample":"npx --yes tsx scripts/generate-pdf-sample.ts"},"dependencies":{"@pdf-lib/fontkit":"^1.1.1","@types/leaflet":"latest","autoprefixer":"latest","html2canvas":"^1.4.1","leaflet":"latest","next":"latest","papaparse":"latest","pdf-lib":"^1.17.1","postcss":"latest","react":"latest","react-dom":"latest","react-is":"^19.2.8","react-leaflet":"latest","recharts":"latest","tailwindcss":"latest"},"devDependencies":{"@tailwindcss/postcss":"^4.3.3","@types/node":"latest","@types/react":"latest","@types/react-dom":"latest","typescript":"latest"}}
+{
+  "name": "fundesco-santafe-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "pdf:sample": "npx --yes tsx scripts/generate-pdf-sample.ts",
+    "verify-assets": "npx --yes tsx scripts/verify-assets.ts"
+  },
+  "dependencies": {
+    "@pdf-lib/fontkit": "^1.1.1",
+    "@types/leaflet": "latest",
+    "autoprefixer": "latest",
+    "html2canvas": "^1.4.1",
+    "leaflet": "latest",
+    "next": "latest",
+    "papaparse": "latest",
+    "pdf-lib": "^1.17.1",
+    "postcss": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "react-is": "^19.2.8",
+    "react-leaflet": "latest",
+    "recharts": "latest",
+    "tailwindcss": "latest"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/node": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "typescript": "latest"
+  }
+}
