@@ -1,6 +1,6 @@
 'use client';
 import dynamic from 'next/dynamic';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, Pie, PieChart, PolarAngleAxis, PolarGrid, PolarRadiusAxis, Radar, RadarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { buildDeterministicAnalysis } from '@/lib/analysis';
 import SantafeContextGallery from './SantafeContextGallery';
@@ -14,7 +14,6 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [pdfLoading, setPdfLoading] = useState(false);
   const [pdfStep, setPdfStep] = useState('');
-  const mapRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     fetch('/api/respuestas', { cache: 'no-store' }).then(r => r.json()).then(async d => {
@@ -34,20 +33,9 @@ export default function Dashboard() {
   async function handleDownloadPdf() {
     if (!data) return;
     setPdfLoading(true);
-    let mapImageBase64 = '';
-    try {
-      setPdfStep('Capturando mapa...');
-      if (mapRef.current) {
-        const html2canvas = (await import('html2canvas')).default;
-        const canvas = await html2canvas(mapRef.current, { useCORS: true, allowTaint: false, scale: 1.5, logging: false });
-        mapImageBase64 = canvas.toDataURL('image/jpeg', 0.82);
-      }
-    } catch {
-      mapImageBase64 = '';
-    }
     try {
       setPdfStep('Generando PDF...');
-      const res = await fetch('/api/pdf', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stats, summary, updatedAt: data.updatedAt, mapImageBase64 }) });
+      const res = await fetch('/api/pdf', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stats, summary, updatedAt: data.updatedAt }) });
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -143,7 +131,7 @@ export default function Dashboard() {
     <section className="max-w-7xl mx-auto px-6 grid lg:grid-cols-3 gap-6 items-start">
       <div className="card p-6 lg:col-span-2" style={{ position: 'relative', zIndex: 0 }}>
         <h2 className="text-2xl font-bold text-fundesco-forest mb-4">Mapa interactivo de avance</h2>
-        <div ref={mapRef} style={{ borderRadius: '1.5rem', overflow: 'hidden' }}>
+        <div style={{ borderRadius: '1.5rem', overflow: 'hidden' }}>
           <MapPanel records={data.records} />
         </div>
       </div>
