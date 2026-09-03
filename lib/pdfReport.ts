@@ -1586,12 +1586,12 @@ export async function generatePdfReport(payload: PdfReportPayload): Promise<PdfB
   if (empleo) {
     cursor = subTitle(cursor, 'Indicadores agregados de empleo', fonts, newPage);
     cursor = drawTable(cursor, [
-      { label: 'Empleos formales', value: empleo.totalFormales },
-      { label: 'Empleos informales / familiares', value: empleo.totalInformales },
-      { label: 'Mujeres vinculadas', value: empleo.totalMujeres },
-      { label: 'Jóvenes vinculados', value: empleo.totalJovenes },
-      { label: 'Adultos mayores (60+)', value: empleo.totalMayores60 },
-      { label: 'Población diversa', value: empleo.totalDiversidad },
+      { label: 'Empleos formales', value: empleo.validosFormales ? empleo.totalFormales : 'Sin dato' },
+      { label: 'Empleos informales / familiares', value: empleo.validosInformales ? empleo.totalInformales : 'Sin dato' },
+      { label: 'Mujeres vinculadas', value: empleo.validosMujeres ? empleo.totalMujeres : 'Sin dato' },
+      { label: 'Jóvenes vinculados', value: empleo.validosJovenes ? empleo.totalJovenes : 'Sin dato' },
+      { label: 'Adultos mayores (60+)', value: empleo.validosMayores60 ? empleo.totalMayores60 : 'Sin dato' },
+      { label: 'Población diversa', value: empleo.validosDiversidad ? empleo.totalDiversidad : 'Sin dato' },
     ], createColumns([
       { label: 'Indicador', width: 340, value: (row: any) => row.label },
       { label: 'Total', width: 120, value: (row: any) => String(row.value), align: 'center' },

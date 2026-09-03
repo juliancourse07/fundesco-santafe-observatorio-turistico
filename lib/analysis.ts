@@ -41,6 +41,13 @@ export type StatsInput = {
     totalJovenes: number;
     totalMayores60: number;
     totalDiversidad: number;
+    totalPersonasVinculadas?: number;
+    validosFormales?: number;
+    validosInformales?: number;
+    validosMujeres?: number;
+    validosJovenes?: number;
+    validosMayores60?: number;
+    validosDiversidad?: number;
   };
   perfilEmprendedores?: {
     topGenero: Datum[];
@@ -160,7 +167,7 @@ function maturityFromStats(stats: StatsInput) {
   const infra = stats.infraestructura;
   const empleo = stats.empleo;
   const total = Math.max(stats.total || 0, 1);
-  const totalEmpleo = (empleo?.totalFormales ?? 0) + (empleo?.totalInformales ?? 0);
+  const totalEmpleo = empleo?.totalPersonasVinculadas ?? ((empleo?.totalFormales ?? 0) + (empleo?.totalInformales ?? 0));
   const formalEmploymentShare = pct(empleo?.totalFormales ?? 0, Math.max(totalEmpleo, 1));
   const employmentIntensity = clamp((totalEmpleo / total) * 20);
   const digitalMentions = (stats.topCanales ?? []).reduce((sum, item) => sum + item.value, 0);
@@ -307,7 +314,8 @@ export function buildDeterministicAnalysis(stats: StatsInput): DeterministicAnal
   const infra = stats.infraestructura;
   const empleo = stats.empleo;
   const prep = stats.preparacion;
-  const totalEmployment = (empleo?.totalFormales ?? 0) + (empleo?.totalInformales ?? 0);
+  const totalEmployment = empleo?.totalPersonasVinculadas ?? ((empleo?.totalFormales ?? 0) + (empleo?.totalInformales ?? 0));
+  const employmentKnown = !!empleo && ((empleo.validosFormales ?? 1) + (empleo.validosInformales ?? 1) > 0);
   const formalEmploymentShare = pct(empleo?.totalFormales ?? 0, Math.max(totalEmployment, 1));
   const topBarrio = stats.avanceBarrio?.[0];
   const topTipo = stats.byTipo?.[0];
@@ -318,7 +326,7 @@ export function buildDeterministicAnalysis(stats: StatsInput): DeterministicAnal
     topTipo ? `${topTipo.name} es el tipo de emprendimiento con mayor presencia, con ${topTipo.value} registros.` : 'No hay informacion suficiente para tipificar la oferta dominante.',
     formal ? `El ${formal.pctRUT}% cuenta con RUT y el ${formal.pctRNT}% con RNT, lo que deja una brecha de ${Math.max(0, formal.pctRUT - formal.pctRNT)} puntos entre formalizacion tributaria y turistica.` : 'No hay informacion suficiente sobre formalizacion.',
     infra ? `La conectividad alcanza ${infra.pctConectividad}% y la sede fisica ${infra.pctSedeFisica}%, lo que describe una base operativa de nivel ${labelLevel(average([infra.pctConectividad, infra.pctSedeFisica]))}.` : 'No hay informacion suficiente sobre infraestructura.',
-    totalEmployment ? `El ecosistema reporta ${totalEmployment} personas vinculadas; el ${formalEmploymentShare}% corresponde a empleo formal.` : 'No se reporta empleo asociado en los registros observados.',
+    employmentKnown ? `El ecosistema reporta ${totalEmployment} personas vinculadas; el ${formalEmploymentShare}% corresponde a empleo formal.` : 'Sin dato suficiente para afirmar cuántas personas están vinculadas.',
     strongestScore ? `La dimension mejor valorada es ${strongestScore.name} (${strongestScore.value}/5), mientras que ${weakestScore?.name || 'la dimension mas debil'} requiere seguimiento prioritario.` : 'No hay autoevaluaciones suficientes para comparar dimensiones.',
     concentration.paragraph,
     maturity.paragraph,
@@ -357,10 +365,10 @@ export function buildDeterministicAnalysis(stats: StatsInput): DeterministicAnal
         ['conectividad', infra.pctConectividad],
       ] as Array<[string, number]>).sort((a, b) => a[1] - b[1])[0][0]}.`,
     ] : ['No hay datos de infraestructura suficientes para construir un analisis.'],
-    employment: empleo ? [
+    employment: employmentKnown ? [
       `Se reportan ${totalEmployment} personas vinculadas, de las cuales ${empleo.totalFormales} son formales y ${empleo.totalInformales} informales o familiares. El peso del empleo formal es ${formalEmploymentShare}%, señal de la necesidad de consolidar estabilidad laboral si el objetivo es escalar oferta turistica.`,
       `El empleo con enfoque inclusivo registra ${empleo.totalMujeres} mujeres, ${empleo.totalJovenes} jovenes, ${empleo.totalMayores60} personas mayores de 60 años y ${empleo.totalDiversidad} personas de poblacion diversa vinculadas.`,
-    ] : ['No hay datos de empleo suficientes para una lectura interpretativa.'],
+    ] : ['Sin dato suficiente para una lectura interpretativa de empleo.'],
     market: [
       stats.productoMercado?.topSegmentos?.length ? `Los segmentos con mayor presencia son ${fmtList(stats.productoMercado.topSegmentos, 4)}. Esto indica una vocacion relevante hacia ${topLabel(stats.productoMercado.topSegmentos).toLowerCase()} como mercado prioritario.` : 'No hay datos de segmentos de mercado suficientes.',
       stats.topCanales?.length ? `En presencia digital predominan ${fmtList(stats.topCanales, 4)}. La intensidad de uso de canales digitales sugiere una base comercial activa, aunque no necesariamente diversificada.` : 'No hay datos de canales digitales suficientes.',
