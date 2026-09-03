@@ -53,6 +53,15 @@ cp .env.example .env.local
 npm run dev
 ```
 
+Para verificar que el mapeo de columnas de la fuente (SharePoint/Google Sheets) no quedó roto y que campos obligatorios como **empleo** no están 100% nulos:
+
+```bash
+npm run verify-mapping            # contra la fuente configurada en .env.local
+npm run verify-mapping datos.csv  # o contra un CSV exportado de la fuente
+```
+
+El comando falla (exit 1) si un campo obligatorio no reconoce ningún valor. Ver `docs/auditoria-campos.md` para la tabla encabezado → campo interno.
+
 ## 6. Despliegue gratuito recomendado
 
 - **Vercel**: ideal para Next.js y suficiente para este caso.
