@@ -1,4 +1,4 @@
-#!/usr/bin/env npx tsx
+#!/usr/bin/env tsx
 /**
  * scripts/verify-field-mapping.ts
  *
@@ -7,12 +7,12 @@
  * más del 20% de sus valores no vacíos no se pueden parsear.
  *
  * Uso:
- *   npx tsx scripts/verify-field-mapping.ts                 # contra la fuente activa (requiere env)
- *   npx tsx scripts/verify-field-mapping.ts <archivo.csv>   # contra un CSV local
+ *   npm run verify-mapping                 # contra la fuente activa (requiere env)
+ *   npm run verify-mapping -- <archivo.csv> # contra un CSV local
  *
  * Códigos de salida:
  *   0 = todo obligatorio tiene al menos un valor reconocido
- *   1 = un campo obligatorio quedó 100% nulo o no se pudo leer la fuente
+ *   1 = un campo obligatorio quedó 100% nulo, superó el umbral de no parseables o no se pudo leer la fuente
  */
 
 import fs from 'node:fs';
