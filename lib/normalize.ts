@@ -34,7 +34,22 @@ export type SurveyRecord = {
 };
 
 const clean = (v: any) => String(v?.Value ?? v?.Title ?? v ?? '').trim();
-const key = (v: string) => v.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/^OData_/, '').replace(/^field_\d+_?/i, '').replace(/[^a-z0-9]/gi, '').toLowerCase();
+/**
+ * Normaliza un encabezado de columna a una clave comparable sin tildes, sin
+ * mayúsculas, sin espacios/puntuación y sin los prefijos/sufijos que agregan las
+ * exportaciones de SharePoint o las columnas duplicadas de Google Sheets.
+ * Así "N° de empleados formales", "Número de empleados formales_1" y
+ * "field_88_NumeroDeEmpleadosFormales" resuelven a la misma clave.
+ */
+const key = (v: string) => v
+  .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  .replace(/^OData_/, '')
+  .replace(/^field_\d+_?/i, '')
+  .replace(/^column_?\d+_?/i, '')
+  .replace(/\bN[°ºo]\.?\b/gi, 'numero')
+  .replace(/[^a-z0-9]/gi, '')
+  .replace(/\d+$/, '')
+  .toLowerCase();
 export function toNumber(v: any): number | null {
   if (v === null || v === undefined || clean(v) === '' || /^(n\/?a|na|null|sin dato)$/i.test(clean(v))) return null;
   const raw = clean(v).replace(/\s/g, '');
@@ -63,8 +78,17 @@ const numOrZero = (v: any) => num(v) ?? 0;
 const yesNo = (v: any) => toBool(v) === true;
 function field(record: RawRecord, label: string, ...aliases: string[]) {
   const targets = [label, ...aliases].map(key);
-  const found = Object.keys(record).find(name => targets.includes(key(name)));
-  return found === undefined ? undefined : record[found];
+  // Preferir coincidencia exacta de clave para evitar falsos positivos.
+  const exact = Object.keys(record).find(name => targets.includes(key(name)));
+  if (exact !== undefined) return record[exact];
+  // Tolerancia a prefijos/sufijos extra en el encabezado (p. ej. "Campo: Número de
+  // empleados formales" o marcas de sección). Solo se acepta si es la ÚNICA
+  // coincidencia parcial para no mezclar columnas.
+  const partial = Object.keys(record).filter(name => {
+    const k = key(name);
+    return targets.some(t => t.length >= 8 && (k.includes(t) || t.includes(k)));
+  });
+  return partial.length === 1 ? record[partial[0]] : undefined;
 }
 
 export function normaliseRecord(r: RawRecord, idx: number): SurveyRecord {
@@ -118,13 +142,13 @@ export function normaliseRecord(r: RawRecord, idx: number): SurveyRecord {
     tieneBanos: toBool(r['¿Cuenta con baños disponibles para usuarios?']),
     tieneBotiquin: toBool(r['¿Cuenta con botiquín y elementos de emergencia?']),
     conectividad: clean(r['Conectividad a internet']),
-    empleadosFormales: num(r['Número de empleados formales']),
-    empleadosInformales: num(r['Número de empleados informales o familiares sin contrato']),
-    mujeres: num(r['Número de mujeres vinculadas']),
-    jovenes: num(r['Número de jóvenes vinculados']),
-    mayores60: num(r['Número de personas mayores de 60 años vinculadas']),
-    diversidad: num(r['Número de personas de población diversa o enfoque diferencial vinculadas']),
-    totalPersonasVinculadas: num(r['Número total de empleados o personas vinculadas']),
+    empleadosFormales: num(r['Número de empleados formales'] ?? field(r, 'Número de empleados formales', 'Empleados formales', 'Empleados formales vinculados', 'Personal formal', 'Número de empleados con contrato formal')),
+    empleadosInformales: num(r['Número de empleados informales o familiares sin contrato'] ?? field(r, 'Número de empleados informales o familiares sin contrato', 'Empleados informales', 'Empleados informales o familiares', 'Personal informal o familiar', 'Número de empleados sin contrato')),
+    mujeres: num(r['Número de mujeres vinculadas'] ?? field(r, 'Número de mujeres vinculadas', 'Mujeres vinculadas', 'Mujeres empleadas', 'Número de mujeres empleadas')),
+    jovenes: num(r['Número de jóvenes vinculados'] ?? field(r, 'Número de jóvenes vinculados', 'Jóvenes vinculados', 'Jóvenes empleados', 'Número de jóvenes empleados')),
+    mayores60: num(r['Número de personas mayores de 60 años vinculadas'] ?? field(r, 'Número de personas mayores de 60 años vinculadas', 'Personas mayores de 60 años', 'Adultos mayores vinculados', 'Número de adultos mayores')),
+    diversidad: num(r['Número de personas de población diversa o enfoque diferencial vinculadas'] ?? field(r, 'Número de personas de población diversa o enfoque diferencial vinculadas', 'Población diversa vinculada', 'Personas de población diversa', 'Número de personas de población diversa')),
+    totalPersonasVinculadas: num(r['Número total de empleados o personas vinculadas'] ?? field(r, 'Número total de empleados o personas vinculadas', 'Total de personas vinculadas', 'Total de empleados', 'Número total de empleados', 'Personas vinculadas')),
     generoRepresentante: clean(r['Género del representante']),
     nivelEducativo: clean(r['Nivel educativo del representante']),
     enfoqueAlta: clean(r['Enfoque diferencial del representante']),
@@ -305,6 +329,18 @@ export function buildStats(records: SurveyRecord[]) {
     };
   });
 
+  // Cobertura de campos críticos: % de registros con valor reconocido (no nulo).
+  // Permite auditar el mapeo fuente→campo y detectar columnas que quedaron 100% nulas.
+  const coverage = {
+    empleadosFormales: pctAnswered(records.map(r => r.empleadosFormales === null ? null : true)) ?? 0,
+    empleadosInformales: pctAnswered(records.map(r => r.empleadosInformales === null ? null : true)) ?? 0,
+    mujeres: pctAnswered(records.map(r => r.mujeres === null ? null : true)) ?? 0,
+    jovenes: pctAnswered(records.map(r => r.jovenes === null ? null : true)) ?? 0,
+    mayores60: pctAnswered(records.map(r => r.mayores60 === null ? null : true)) ?? 0,
+    diversidad: pctAnswered(records.map(r => r.diversidad === null ? null : true)) ?? 0,
+    totalPersonasVinculadas: pctAnswered(records.map(r => r.totalPersonasVinculadas === null ? null : true)) ?? 0,
+  };
+
   return {
     total: records.length,
     rutas: records.filter(r => r.quiereRuta).length,
@@ -335,5 +371,6 @@ export function buildStats(records: SurveyRecord[]) {
     byFecha,
     fechaInicio,
     fechaFin,
+    coverage,
   };
 }

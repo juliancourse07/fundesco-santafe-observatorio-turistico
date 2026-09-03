@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, Pie, PieChart, PolarAngleAxis, PolarGrid, PolarRadiusAxis, Radar, RadarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { buildDeterministicAnalysis } from '@/lib/analysis';
 import SantafeContextGallery from './SantafeContextGallery';
+import SectionErrorBoundary from './SectionErrorBoundary';
 
 const MapPanel = dynamic(() => import('./MapPanel'), { ssr: false });
 const COLORES = ['#178C72', '#B5D334', '#10483D', '#F2B705', '#4ade80', '#60a5fa', '#f87171', '#a78bfa'];
@@ -30,7 +31,20 @@ export default function Dashboard() {
   }, []);
 
   const stats = data?.stats;
-  const analysis = useMemo(() => stats ? buildDeterministicAnalysis(stats) : null, [stats]);
+  // Helper local: solo renderiza gráficas cuando el dato es realmente un arreglo.
+  const arr = (v: any): any[] => (Array.isArray(v) ? v : []);
+  // Memoizados para no recrear objetos/arrays en cada render (evita re-render
+  // en cascada del mapa y las gráficas cuando llega el resumen de IA).
+  const records = useMemo(() => (Array.isArray(data?.records) ? data.records : []), [data]);
+  const analysis = useMemo(() => {
+    if (!stats) return null;
+    try {
+      return buildDeterministicAnalysis(stats);
+    } catch (error) {
+      console.error('[observatorio] Error construyendo el análisis:', error);
+      return null;
+    }
+  }, [stats]);
 
   async function handleDownloadPdf() {
     if (!data) return;
@@ -45,6 +59,8 @@ export default function Dashboard() {
       a.download = 'informe-1-diagnostico-fundesco-santa-fe.pdf';
       a.click();
       URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('[observatorio] Error generando Informe 1:', error);
     } finally {
       setPdfLoading(false);
       setPdfStep('');
@@ -64,6 +80,8 @@ export default function Dashboard() {
       a.download = 'informe-2-potenciales-fundesco-santa-fe.pdf';
       a.click();
       URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('[observatorio] Error generando Informe 2:', error);
     } finally {
       setPdfLoading2(false);
       setPdfStep2('');
@@ -168,7 +186,9 @@ export default function Dashboard() {
       <div className="card p-6 lg:col-span-2" style={{ position: 'relative', zIndex: 0 }}>
         <h2 className="text-2xl font-bold text-fundesco-forest mb-4">Mapa interactivo de avance</h2>
         <div style={{ borderRadius: '1.5rem', overflow: 'hidden' }}>
-          <MapPanel records={data.records} />
+          <SectionErrorBoundary name="Mapa interactivo">
+            <MapPanel records={records} />
+          </SectionErrorBoundary>
         </div>
       </div>
       <div className="space-y-6">
@@ -288,19 +308,21 @@ export default function Dashboard() {
     )}
 
     <section className="max-w-7xl mx-auto px-6 py-4 grid lg:grid-cols-2 gap-6" aria-label="Distribuciones principales">
-      <Chart title="Top barrios" data={stats.byBarrio} nota={`n=${stats.total}`} />
-      <Chart title="Tipos de emprendimiento" data={stats.byTipo} nota={`n=${stats.total}`} />
-      <Chart title="Necesidades de apoyo" data={stats.necesidades} nota={`n=${stats.total}`} />
-      <div className="card p-6">
-        <h2 className="text-xl font-bold mb-1">Capacidades promedio</h2>
-        <p className="text-xs text-slate-400 mb-3">Escala 1-5 · n={stats.total}</p>
-        <ResponsiveContainer width="100%" height={330}>
-          <RadarChart data={stats.scores}>
-            <PolarGrid /><PolarAngleAxis dataKey="name" /><PolarRadiusAxis domain={[0, 5]} />
-            <Radar dataKey="value" stroke="#178C72" fill="#178C72" fillOpacity={0.35} /><Tooltip />
-          </RadarChart>
-        </ResponsiveContainer>
-      </div>
+      <SectionErrorBoundary name="Gráfico: Top barrios"><Chart title="Top barrios" data={arr(stats.byBarrio)} nota={`n=${stats.total}`} /></SectionErrorBoundary>
+      <SectionErrorBoundary name="Gráfico: Tipos de emprendimiento"><Chart title="Tipos de emprendimiento" data={arr(stats.byTipo)} nota={`n=${stats.total}`} /></SectionErrorBoundary>
+      <SectionErrorBoundary name="Gráfico: Necesidades de apoyo"><Chart title="Necesidades de apoyo" data={arr(stats.necesidades)} nota={`n=${stats.total}`} /></SectionErrorBoundary>
+      <SectionErrorBoundary name="Gráfico: Capacidades promedio">
+        <div className="card p-6">
+          <h2 className="text-xl font-bold mb-1">Capacidades promedio</h2>
+          <p className="text-xs text-slate-400 mb-3">Escala 1-5 · n={stats.total}</p>
+          <ResponsiveContainer width="100%" height={330}>
+            <RadarChart data={Array.isArray(stats.scores) ? stats.scores : []}>
+              <PolarGrid /><PolarAngleAxis dataKey="name" /><PolarRadiusAxis domain={[0, 5]} />
+              <Radar dataKey="value" stroke="#178C72" fill="#178C72" fillOpacity={0.35} /><Tooltip />
+            </RadarChart>
+          </ResponsiveContainer>
+        </div>
+      </SectionErrorBoundary>
     </section>
 
     {stats.byFecha && stats.byFecha.length > 1 && (
@@ -322,41 +344,41 @@ export default function Dashboard() {
     )}
 
     <section className="max-w-7xl mx-auto px-6 py-4 grid lg:grid-cols-2 gap-6" aria-label="Perfil y mercado">
-      {stats.perfilEmprendedores?.topGenero?.length > 0 && (
+      {arr(stats.perfilEmprendedores?.topGenero).length > 0 && (
         <div className="card p-6">
           <h2 className="text-xl font-bold text-fundesco-forest mb-1">Género de representantes</h2>
           <p className="text-xs text-slate-400 mb-3">n={stats.total}</p>
           <ResponsiveContainer width="100%" height={220}>
             <PieChart>
-              <Pie data={stats.perfilEmprendedores.topGenero} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label={({ name, percent }: any) => `${name ?? ''} ${((percent ?? 0) * 100).toFixed(0)}%`}>
-                {stats.perfilEmprendedores.topGenero.map((_: any, i: number) => <Cell key={i} fill={COLORES[i % COLORES.length]} />)}
+              <Pie data={arr(stats.perfilEmprendedores.topGenero)} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label={({ name, percent }: any) => `${name ?? ''} ${((percent ?? 0) * 100).toFixed(0)}%`}>
+                {arr(stats.perfilEmprendedores.topGenero).map((_: any, i: number) => <Cell key={i} fill={COLORES[i % COLORES.length]} />)}
               </Pie>
               <Tooltip /><Legend />
             </PieChart>
           </ResponsiveContainer>
         </div>
       )}
-      {stats.perfilEmprendedores?.topEducacion?.length > 0 && <Chart title="Nivel educativo representantes" data={stats.perfilEmprendedores.topEducacion} nota={`n=${stats.total}`} />}
-      {stats.productoMercado?.topSegmentos?.length > 0 && <Chart title="Segmentos de mercado" data={stats.productoMercado.topSegmentos} nota={`n=${stats.total}`} />}
-      {stats.productoMercado?.topIdiomas?.length > 0 && <Chart title="Idiomas de atención" data={stats.productoMercado.topIdiomas} nota={`n=${stats.total}`} />}
+      {arr(stats.perfilEmprendedores?.topEducacion).length > 0 && <Chart title="Nivel educativo representantes" data={arr(stats.perfilEmprendedores.topEducacion)} nota={`n=${stats.total}`} />}
+      {arr(stats.productoMercado?.topSegmentos).length > 0 && <Chart title="Segmentos de mercado" data={arr(stats.productoMercado.topSegmentos)} nota={`n=${stats.total}`} />}
+      {arr(stats.productoMercado?.topIdiomas).length > 0 && <Chart title="Idiomas de atención" data={arr(stats.productoMercado.topIdiomas)} nota={`n=${stats.total}`} />}
     </section>
 
     <section className="max-w-7xl mx-auto px-6 py-4 grid lg:grid-cols-2 gap-6">
-      {stats.topCanales?.length > 0 && <Chart title="Canales digitales" data={stats.topCanales} nota={`n=${stats.total}`} />}
-      {stats.topPracticasSostenibilidad?.length > 0 && <Chart title="Prácticas de sostenibilidad" data={stats.topPracticasSostenibilidad} nota={`n=${stats.total}`} />}
-      {stats.topNecesidadesCapacitacion?.length > 0 && <Chart title="Necesidades de capacitación" data={stats.topNecesidadesCapacitacion} nota={`n=${stats.total}`} />}
-      {stats.topEncuestadores?.length > 0 && <Chart title="Encuestas por encuestador/a" data={stats.topEncuestadores} nota={`n=${stats.total}`} />}
+      {arr(stats.topCanales).length > 0 && <Chart title="Canales digitales" data={arr(stats.topCanales)} nota={`n=${stats.total}`} />}
+      {arr(stats.topPracticasSostenibilidad).length > 0 && <Chart title="Prácticas de sostenibilidad" data={arr(stats.topPracticasSostenibilidad)} nota={`n=${stats.total}`} />}
+      {arr(stats.topNecesidadesCapacitacion).length > 0 && <Chart title="Necesidades de capacitación" data={arr(stats.topNecesidadesCapacitacion)} nota={`n=${stats.total}`} />}
+      {arr(stats.topEncuestadores).length > 0 && <Chart title="Encuestas por encuestador/a" data={arr(stats.topEncuestadores)} nota={`n=${stats.total}`} />}
     </section>
 
-    {stats.completitudDist?.length > 0 && (
+    {arr(stats.completitudDist).length > 0 && (
       <section className="max-w-7xl mx-auto px-6 py-4 grid lg:grid-cols-2 gap-6">
         <div className="card p-6">
           <h2 className="text-xl font-bold text-fundesco-forest mb-1">Completitud de registros</h2>
           <p className="text-xs text-slate-400 mb-3">Tasa de completitud: {stats.tasaCompletitud}% · n={stats.total}</p>
           <ResponsiveContainer width="100%" height={220}>
             <PieChart>
-              <Pie data={stats.completitudDist} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label={({ name, percent }: any) => `${name ?? ''} ${((percent ?? 0) * 100).toFixed(0)}%`}>
-                {stats.completitudDist.map((_: any, i: number) => <Cell key={i} fill={COLORES[i % COLORES.length]} />)}
+              <Pie data={arr(stats.completitudDist)} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label={({ name, percent }: any) => `${name ?? ''} ${((percent ?? 0) * 100).toFixed(0)}%`}>
+                {arr(stats.completitudDist).map((_: any, i: number) => <Cell key={i} fill={COLORES[i % COLORES.length]} />)}
               </Pie>
               <Tooltip /><Legend />
             </PieChart>

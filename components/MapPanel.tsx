@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { MapContainer, TileLayer, CircleMarker, Popup, GeoJSON, LayersControl, useMap } from 'react-leaflet';
 import type { Layer, PathOptions, LatLngBoundsExpression } from 'leaflet';
 
@@ -43,23 +43,55 @@ function FitBounds({ geoData }: { geoData: GeoData | null }) {
 
 export default function MapPanel({ records }: { records: SurveyRecord[] }) {
   const [geoData, setGeoData] = useState<GeoData | null>(null);
+  // Lista de registros saneada y estable: solo puntos con coordenadas válidas.
+  const safeRecords = useMemo(
+    () => (Array.isArray(records) ? records : []).filter(
+      r => r && Number.isFinite(r.lat) && Number.isFinite(r.lng)
+    ),
+    [records]
+  );
 
   useEffect(() => {
-    fetch('/geo/santafe-barrios.geojson').then(r => r.json()).then(setGeoData).catch(() => null);
+    let cancelled = false;
+    fetch('/geo/santafe-barrios.geojson').then(r => r.json()).then(d => { if (!cancelled) setGeoData(d); }).catch(() => null);
+    return () => { cancelled = true; };
   }, []);
 
-  const barrioCount: Record<string, number> = {};
-  const barrioTipos: Record<string, Record<string, number>> = {};
-  const barrioScores: Record<string, number[]> = {};
-  for (const r of records) {
-    const b = r.barrio || 'Otro';
-    barrioCount[b] = (barrioCount[b] || 0) + 1;
-    if (!barrioTipos[b]) barrioTipos[b] = {};
-    barrioTipos[b][r.tipo] = (barrioTipos[b][r.tipo] || 0) + 1;
-    const avg = r.scores ? Object.values(r.scores).reduce((a, v) => a + v, 0) / Math.max(Object.values(r.scores).length, 1) : 0;
-    if (!barrioScores[b]) barrioScores[b] = [];
-    if (avg > 0) barrioScores[b].push(avg);
-  }
+  // Agregados por barrio memoizados: antes se recalculaban en CADA render y se
+  // re-serializaban como `key` del GeoJSON, forzando el remontaje completo de la
+  // capa de Leaflet en cada actualización de estado del dashboard.
+  const { barrioCount, barrioTipos, barrioScores, barrioCountKey } = useMemo(() => {
+    const count: Record<string, number> = {};
+    const tipos: Record<string, Record<string, number>> = {};
+    const scores: Record<string, number[]> = {};
+    for (const r of safeRecords) {
+      const b = r.barrio || 'Otro';
+      count[b] = (count[b] || 0) + 1;
+      if (!tipos[b]) tipos[b] = {};
+      tipos[b][r.tipo] = (tipos[b][r.tipo] || 0) + 1;
+      const avg = r.scores ? Object.values(r.scores).reduce((a, v) => a + v, 0) / Math.max(Object.values(r.scores).length, 1) : 0;
+      if (!scores[b]) scores[b] = [];
+      if (avg > 0) scores[b].push(avg);
+    }
+    return { barrioCount: count, barrioTipos: tipos, barrioScores: scores, barrioCountKey: JSON.stringify(count) };
+  }, [safeRecords]);
+
+  // Marcadores memoizados para no recrear todos los CircleMarker en cada render.
+  const markers = useMemo(() => safeRecords.map(r => (
+    <CircleMarker
+      key={r.id}
+      center={[r.lat, r.lng]}
+      radius={r.geoPrecision === 'exacto' ? 7 : 5}
+      pathOptions={{ color: r.geoPrecision === 'exacto' ? '#166534' : '#ca8a04', fillColor: r.geoPrecision === 'exacto' ? '#4ade80' : '#fde047', fillOpacity: 0.85, weight: 1.5 }}
+    >
+      <Popup>
+        <b>{r.nombre || 'Emprendimiento'}</b><br />
+        {r.barrio} — {r.upz}<br />
+        {r.tipo}<br />
+        <span style={{ color: '#666', fontSize: '11px' }}>Geo: {r.geoPrecision}</span>
+      </Popup>
+    </CircleMarker>
+  )), [safeRecords]);
 
   return (
     <div style={{ position: 'relative', height: '520px', width: '100%', borderRadius: '1.5rem', overflow: 'hidden' }}>
@@ -82,7 +114,7 @@ export default function MapPanel({ records }: { records: SurveyRecord[] }) {
           <LayersControl.Overlay checked name="Vista por zonas (choropleth)">
             {geoData && (
               <GeoJSON
-                key={JSON.stringify(barrioCount)}
+                key={barrioCountKey}
                 data={geoData as any}
                 style={(feature: any) => {
                   const nombre = feature?.properties?.nombre as string;
@@ -118,21 +150,7 @@ export default function MapPanel({ records }: { records: SurveyRecord[] }) {
 
           <LayersControl.Overlay checked name="Puntos individuales">
             <>
-              {records.map(r => (
-                <CircleMarker
-                  key={r.id}
-                  center={[r.lat, r.lng]}
-                  radius={r.geoPrecision === 'exacto' ? 7 : 5}
-                  pathOptions={{ color: r.geoPrecision === 'exacto' ? '#166534' : '#ca8a04', fillColor: r.geoPrecision === 'exacto' ? '#4ade80' : '#fde047', fillOpacity: 0.85, weight: 1.5 }}
-                >
-                  <Popup>
-                    <b>{r.nombre || 'Emprendimiento'}</b><br />
-                    {r.barrio} — {r.upz}<br />
-                    {r.tipo}<br />
-                    <span style={{ color: '#666', fontSize: '11px' }}>Geo: {r.geoPrecision}</span>
-                  </Popup>
-                </CircleMarker>
-              ))}
+              {markers}
             </>
           </LayersControl.Overlay>
         </LayersControl>

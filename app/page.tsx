@@ -1,2 +1,10 @@
 import Dashboard from '@/components/Dashboard';
-export default function Page(){ return <Dashboard/> }
+import SectionErrorBoundary from '@/components/SectionErrorBoundary';
+
+export default function Page() {
+  return (
+    <SectionErrorBoundary name="Dashboard" fullPage>
+      <Dashboard />
+    </SectionErrorBoundary>
+  );
+}

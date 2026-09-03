@@ -126,6 +126,9 @@ const round = (value: number, digits = 1) => Number(value.toFixed(digits));
 const clamp = (value: number, min = 0, max = 100) => Math.min(max, Math.max(min, value));
 const average = (values: number[]) => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
 const valueOrZero = (value?: number) => Number.isFinite(value) ? Number(value) : 0;
+// Garantiza un arreglo aunque la fuente entregue un valor malformado (evita que
+// un campo corrupto rompa el análisis completo y tumbe el tablero).
+const asArray = <T,>(value: unknown): T[] => Array.isArray(value) ? (value as T[]) : [];
 const labelLevel = (score: number, high = 70, medium = 45) => score >= high ? 'alto' : score >= medium ? 'medio' : 'bajo';
 const maturityLevel = (score: number) => score >= 75 ? 'Alta' : score >= 55 ? 'Media' : 'Baja';
 const topLabel = (items?: Datum[], fallback = 'Sin dato') => items?.[0]?.name || fallback;
@@ -306,7 +309,34 @@ function recommendationMatrix(stats: StatsInput, maturityScore: number, concentr
   return recommendations.slice(0, 6);
 }
 
-export function buildDeterministicAnalysis(stats: StatsInput): DeterministicAnalysis {
+export function buildDeterministicAnalysis(input: StatsInput): DeterministicAnalysis {
+  // Defensa ante datos malformados: normaliza los arreglos que se recorren para
+  // que un campo corrupto no rompa el análisis ni tumbe la página.
+  const stats: StatsInput = {
+    ...input,
+    scores: asArray<Datum>(input.scores),
+    byBarrio: asArray<Datum>(input.byBarrio),
+    byUpz: asArray<Datum>(input.byUpz),
+    byTipo: asArray<Datum>(input.byTipo),
+    necesidades: asArray<Datum>(input.necesidades),
+    herramientas: asArray<Datum>(input.herramientas),
+    topCanales: asArray<Datum>(input.topCanales),
+    topPracticasSostenibilidad: asArray<Datum>(input.topPracticasSostenibilidad),
+    topNecesidadesCapacitacion: asArray<Datum>(input.topNecesidadesCapacitacion),
+    avanceBarrio: asArray<BarrioProgress>(input.avanceBarrio),
+    byFecha: asArray<{ fecha: string; value: number }>(input.byFecha),
+    atractivos: asArray<Datum>(input.atractivos),
+    articulacion: asArray<Datum>(input.articulacion),
+    topEncuestadores: asArray<Datum>(input.topEncuestadores),
+    completitudDist: asArray<Datum>(input.completitudDist),
+    // Subobjetos: si llegan como escalar u otro tipo, se descartan para no romper.
+    productoMercado: input.productoMercado && typeof input.productoMercado === 'object' ? input.productoMercado : undefined,
+    perfilEmprendedores: input.perfilEmprendedores && typeof input.perfilEmprendedores === 'object' ? input.perfilEmprendedores : undefined,
+    formalizacion: input.formalizacion && typeof input.formalizacion === 'object' ? input.formalizacion : undefined,
+    infraestructura: input.infraestructura && typeof input.infraestructura === 'object' ? input.infraestructura : undefined,
+    empleo: input.empleo && typeof input.empleo === 'object' ? input.empleo : undefined,
+    preparacion: input.preparacion && typeof input.preparacion === 'object' ? input.preparacion : undefined,
+  };
   const concentration = concentrationFromStats(stats);
   const maturity = maturityFromStats(stats);
   const methodology = methodologyFromStats(stats);
