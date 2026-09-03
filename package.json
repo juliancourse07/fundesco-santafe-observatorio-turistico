@@ -6,7 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
+    "lint": "tsc --noEmit",
     "pdf:sample": "tsx scripts/generate-pdf-sample.ts",
     "verify-assets": "tsx scripts/verify-assets.ts",
     "verify-mapping": "tsx scripts/verify-field-mapping.ts"
