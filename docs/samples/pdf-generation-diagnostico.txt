@@ -2,7 +2,7 @@
 [sample] source=data-current-summary.json
 [sample] output=docs/samples/informe-1-diagnostico-fundesco-santa-fe.pdf
 [sample] total_registros=17
-[sample] pdf pages: 22
+[sample] pdf pages: 23
 [sample] font ok: public/fonts/Lato-Regular.ttf
 [sample] font ok: public/fonts/Lato-Bold.ttf
 [sample] letterhead: loaded (1 page)

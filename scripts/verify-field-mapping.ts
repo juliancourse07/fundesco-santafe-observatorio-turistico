@@ -1,26 +1,25 @@
-#!/usr/bin/env npx tsx
+#!/usr/bin/env tsx
 /**
  * scripts/verify-field-mapping.ts
  *
  * Guardia contra mapeos rotos entre la fuente (SharePoint / Google Sheets) y los
- * campos internos. Falla (exit 1) si un campo OBLIGATORIO queda 100% nulo en
- * todos los registros, de modo que un error de mapeo no vuelva a pasar en
- * silencio (caso: "Empleo total: 0").
+ * campos internos. Falla (exit 1) si un campo OBLIGATORIO queda 100% nulo o si
+ * más del 20% de sus valores no vacíos no se pueden parsear.
  *
  * Uso:
- *   npx tsx scripts/verify-field-mapping.ts                 # contra la fuente activa (requiere env)
- *   npx tsx scripts/verify-field-mapping.ts <archivo.csv>   # contra un CSV local
+ *   npm run verify-mapping                 # contra la fuente activa (requiere env)
+ *   npm run verify-mapping -- <archivo.csv> # contra un CSV local
  *
  * Códigos de salida:
  *   0 = todo obligatorio tiene al menos un valor reconocido
- *   1 = un campo obligatorio quedó 100% nulo o no se pudo leer la fuente
+ *   1 = un campo obligatorio quedó 100% nulo, superó el umbral de no parseables o no se pudo leer la fuente
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
 import Papa from 'papaparse';
 import { fetchSheetRows } from '../lib/csv';
-import { buildStats, normaliseRecord, type SurveyRecord } from '../lib/normalize';
+import { buildStats, field, normaliseRecord, type SurveyRecord } from '../lib/normalize';
 
 type CampoRequerido = {
   campo: keyof SurveyRecord;
@@ -30,6 +29,8 @@ type CampoRequerido = {
   /** Si es true, el campo es obligatorio y no puede quedar 100% nulo. */
   obligatorio: boolean;
 };
+
+const UMBRAL_NO_PARSEABLE_OBLIGATORIO = 20;
 
 // Bloque de empleo: es el que quedó en 0 en producción.
 const CAMPOS_EMPLEO: CampoRequerido[] = [
@@ -48,13 +49,34 @@ const CAMPOS_ESTRUCTURA: CampoRequerido[] = [
   { campo: 'tipo', etiqueta: 'Tipo de emprendimiento', encabezados: ['Tipo principal de emprendimiento'], obligatorio: true },
 ];
 
-const TODOS = [...CAMPOS_ESTRUCTURA, ...CAMPOS_EMPLEO];
+const CAMPOS_RANGOS_OPERATIVOS: CampoRequerido[] = [
+  { campo: 'capacidadDiaria', etiqueta: 'Capacidad máxima diaria', encabezados: ['Capacidad máxima de atención diaria'], obligatorio: false },
+  { campo: 'capacidadVisitantes', etiqueta: 'Visitantes simultáneos', encabezados: ['Capacidad máxima de visitantes al mismo tiempo'], obligatorio: false },
+  { campo: 'numeroEspaciosAtencion', etiqueta: 'Espacios de atención', encabezados: ['Número de espacios de atención'], obligatorio: false },
+  { campo: 'anosExperienciaTurismo', etiqueta: 'Años de experiencia', encabezados: ['Años de experiencia en turismo o actividad relacionada'], obligatorio: false },
+];
+
+const TODOS = [...CAMPOS_ESTRUCTURA, ...CAMPOS_EMPLEO, ...CAMPOS_RANGOS_OPERATIVOS];
 
 function esValorReconocido(v: unknown): boolean {
   if (v === null || v === undefined) return false;
   if (typeof v === 'string') return v.trim() !== '';
   if (Array.isArray(v)) return v.length > 0;
   return true; // números y booleanos reconocidos (incluye 0 y false, que son datos reales)
+}
+
+function valorFuente(row: Record<string, unknown>, campo: CampoRequerido) {
+  for (const encabezado of campo.encabezados) {
+    const value = field(row, encabezado);
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
+function esNoVacioFuente(v: unknown): boolean {
+  if (v === null || v === undefined) return false;
+  if (Array.isArray(v)) return v.length > 0;
+  return String((v as any)?.Value ?? (v as any)?.Title ?? v).trim() !== '';
 }
 
 async function leerFilas(): Promise<Record<string, unknown>[]> {
@@ -97,24 +119,30 @@ async function main() {
   const headersReales = [...new Set(rows.flatMap(r => Object.keys(r)))];
 
   console.log(`\n[verify] Registros: ${records.length} · columnas devueltas: ${headersReales.length}`);
-  console.log('\n[verify] Cobertura por campo (registros con valor reconocido):');
+  console.log('\n[verify] Cobertura por campo (reconocidos y no parseables):');
 
   let fallos = 0;
   for (const c of TODOS) {
     const conValor = records.filter(r => esValorReconocido(r[c.campo])).length;
+    const noVaciosFuente = rows.filter(row => esNoVacioFuente(valorFuente(row, c))).length;
+    const noParseables = Math.max(0, noVaciosFuente - conValor);
     const pct = Math.round((conValor / records.length) * 100);
+    const pctNoParseable = noVaciosFuente ? Math.round((noParseables / noVaciosFuente) * 100) : 0;
     const marca = c.obligatorio ? '*' : ' ';
-    const estado = pct === 0 && c.obligatorio ? 'FALLO' : 'ok';
-    if (pct === 0 && c.obligatorio) fallos += 1;
-    console.log(`  ${marca} ${c.etiqueta.padEnd(32)} ${String(pct).padStart(3)}%  [${estado}]  ← ${c.encabezados.join(' | ')}`);
+    const fallaNulo = pct === 0 && c.obligatorio;
+    const fallaParseo = c.obligatorio && pctNoParseable > UMBRAL_NO_PARSEABLE_OBLIGATORIO;
+    const estado = fallaNulo || fallaParseo ? 'FALLO' : 'ok';
+    if (fallaNulo || fallaParseo) fallos += 1;
+    console.log(`  ${marca} ${c.etiqueta.padEnd(32)} ${String(pct).padStart(3)}% reconocidos · ${String(pctNoParseable).padStart(3)}% no parseable (${noParseables}/${noVaciosFuente})  [${estado}]  ← ${c.encabezados.join(' | ')}`);
   }
 
   console.log('\n[verify] Totales de empleo calculados:');
-  console.log(`  Personas vinculadas: ${stats.empleo.totalPersonasVinculadas} · formales: ${stats.empleo.totalFormales} · informales: ${stats.empleo.totalInformales}`);
-  console.log(`  mujeres: ${stats.empleo.totalMujeres} · jóvenes: ${stats.empleo.totalJovenes} · 60+: ${stats.empleo.totalMayores60} · diversa: ${stats.empleo.totalDiversidad}`);
+  console.log(`  Personas vinculadas: ${stats.empleo.totalPersonasVinculadasMin}-${stats.empleo.totalPersonasVinculadasMax} · punto ${stats.empleo.totalPersonasVinculadasPunto}`);
+  console.log(`  formales: ${stats.empleo.totalFormalesMin}-${stats.empleo.totalFormalesMax} · informales: ${stats.empleo.totalInformalesMin}-${stats.empleo.totalInformalesMax}`);
+  console.log(`  mujeres: ${stats.empleo.totalMujeresMin}-${stats.empleo.totalMujeresMax} · jóvenes: ${stats.empleo.totalJovenesMin}-${stats.empleo.totalJovenesMax} · 60+: ${stats.empleo.totalMayores60Min}-${stats.empleo.totalMayores60Max} · diversa: ${stats.empleo.totalDiversidadMin}-${stats.empleo.totalDiversidadMax}`);
 
   if (fallos > 0) {
-    console.error(`\n[verify] FALLO: ${fallos} campo(s) obligatorio(s) quedaron 100% nulos. Revisa el mapeo de encabezados (acentos, N°, sufijos _1, prefijos SharePoint).`);
+    console.error(`\n[verify] FALLO: ${fallos} campo(s) obligatorio(s) quedaron 100% nulos o superaron ${UMBRAL_NO_PARSEABLE_OBLIGATORIO}% de valores no parseables. Revisa encabezados y categorías textuales.`);
     process.exit(1);
   }
 

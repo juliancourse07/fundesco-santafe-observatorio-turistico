@@ -8,6 +8,17 @@ import SectionErrorBoundary from './SectionErrorBoundary';
 
 const MapPanel = dynamic(() => import('./MapPanel'), { ssr: false });
 const COLORES = ['#178C72', '#B5D334', '#10483D', '#F2B705', '#4ade80', '#60a5fa', '#f87171', '#a78bfa'];
+const empleoPunto = (empleo: any) => empleo?.totalPersonasVinculadasPunto ?? empleo?.totalPersonasVinculadas ?? ((empleo?.totalFormalesPunto ?? empleo?.totalFormales ?? 0) + (empleo?.totalInformalesPunto ?? empleo?.totalInformales ?? 0));
+const empleoRango = (empleo: any) => {
+  if (!empleo) return 'Sin dato';
+  const punto = empleoPunto(empleo);
+  const min = empleo.totalPersonasVinculadasMin ?? punto;
+  const max = empleo.totalPersonasVinculadasMax ?? punto;
+  return min === max ? String(punto) : `${min}–${max} (punto ${punto})`;
+};
+const rangoDetalle = (empleo: any, base: string, validos: string) => empleo?.[validos]
+  ? `${empleo[`${base}Min`] ?? empleo[base]}–${empleo[`${base}Max`] ?? empleo[base]} (punto ${empleo[`${base}Punto`] ?? empleo[base]})`
+  : 'Sin dato';
 
 export default function Dashboard() {
   const [data, setData] = useState<any>(null);
@@ -148,7 +159,7 @@ export default function Dashboard() {
       <Kpi label="Puntos exactos" value={stats.exactos} />
       <Kpi label="Puntos estimados" value={stats.estimados} />
       <Kpi label="Tasa completitud" value={`${stats.tasaCompletitud ?? 0}%`} />
-      <Kpi label="Empleo total" value={(stats.empleo?.totalFormales ?? 0) + (stats.empleo?.totalInformales ?? 0)} />
+      <Kpi label="Empleo total estimado" value={empleoRango(stats.empleo)} />
     </section>
 
     {analysis && (
@@ -267,12 +278,14 @@ export default function Dashboard() {
         <div className="card p-6">
           <h2 className="text-xl font-bold text-fundesco-forest mb-4">Empleo</h2>
           {stats.empleo && <>
-            <div className="flex justify-between py-1 border-b border-slate-100"><span className="text-sm text-slate-600">Empleos formales</span><span className="font-bold text-fundesco-forest">{stats.empleo.totalFormales}</span></div>
-            <div className="flex justify-between py-1 border-b border-slate-100"><span className="text-sm text-slate-600">Empleos informales</span><span className="font-bold">{stats.empleo.totalInformales}</span></div>
-            <div className="flex justify-between py-1 border-b border-slate-100"><span className="text-sm text-slate-600">Mujeres vinculadas</span><span className="font-bold">{stats.empleo.totalMujeres}</span></div>
-            <div className="flex justify-between py-1 border-b border-slate-100"><span className="text-sm text-slate-600">Jóvenes</span><span className="font-bold">{stats.empleo.totalJovenes}</span></div>
-            <div className="flex justify-between py-1 border-b border-slate-100"><span className="text-sm text-slate-600">Adultos mayores</span><span className="font-bold">{stats.empleo.totalMayores60}</span></div>
-            <div className="flex justify-between py-1"><span className="text-sm text-slate-600">Población diversa</span><span className="font-bold">{stats.empleo.totalDiversidad}</span></div>
+            <p className="text-xs text-slate-500 mb-3">Estimaciones derivadas de rangos categóricos; entre paréntesis se muestra el punto medio.</p>
+            <div className="flex justify-between gap-3 py-1 border-b border-slate-100"><span className="text-sm text-slate-600">Personas vinculadas</span><span className="font-bold text-right text-fundesco-forest">{empleoRango(stats.empleo)}</span></div>
+            <div className="flex justify-between gap-3 py-1 border-b border-slate-100"><span className="text-sm text-slate-600">Empleos formales</span><span className="font-bold text-right">{rangoDetalle(stats.empleo, 'totalFormales', 'validosFormales')}</span></div>
+            <div className="flex justify-between gap-3 py-1 border-b border-slate-100"><span className="text-sm text-slate-600">Empleos informales</span><span className="font-bold text-right">{rangoDetalle(stats.empleo, 'totalInformales', 'validosInformales')}</span></div>
+            <div className="flex justify-between gap-3 py-1 border-b border-slate-100"><span className="text-sm text-slate-600">Mujeres vinculadas</span><span className="font-bold text-right">{rangoDetalle(stats.empleo, 'totalMujeres', 'validosMujeres')}</span></div>
+            <div className="flex justify-between gap-3 py-1 border-b border-slate-100"><span className="text-sm text-slate-600">Jóvenes</span><span className="font-bold text-right">{rangoDetalle(stats.empleo, 'totalJovenes', 'validosJovenes')}</span></div>
+            <div className="flex justify-between gap-3 py-1 border-b border-slate-100"><span className="text-sm text-slate-600">Adultos mayores</span><span className="font-bold text-right">{rangoDetalle(stats.empleo, 'totalMayores60', 'validosMayores60')}</span></div>
+            <div className="flex justify-between gap-3 py-1"><span className="text-sm text-slate-600">Población diversa</span><span className="font-bold text-right">{rangoDetalle(stats.empleo, 'totalDiversidad', 'validosDiversidad')}</span></div>
           </>}
         </div>
       </section>
