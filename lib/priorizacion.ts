@@ -17,6 +17,7 @@ export const criteriosPriorizacion = [
 const score = (value: number) => Math.max(1, Math.min(10, Math.round(value)));
 const avg = (values: number[]) => values.length ? values.reduce((a, b) => a + b, 0) / values.length : 1;
 const bool = (value: boolean | null) => value === true ? 10 : value === false ? 1 : 1;
+const employmentPoint = (record: SurveyRecord) => record.totalPersonasVinculadas ?? ((record.empleadosFormales ?? 0) + (record.empleadosInformales ?? 0));
 
 export type FilaPriorizacion = { identificacion: string; barrio: string; tipoActor: string; criterios: Record<string, number>; puntajePonderado: number; posicion: number; seleccionado: 'Sí' | 'No' };
 
@@ -25,6 +26,7 @@ export function priorizar(records: SurveyRecord[]): FilaPriorizacion[] {
     const formal = avg([bool(record.tieneRegistroMercantil), bool(record.tieneRUT), bool(record.tieneRNT)]);
     const dti = avg(Object.values(record.scores).map(value => value * 2));
     const infraestructura = avg([bool(record.tieneSedeFisica), bool(record.tieneBanos), bool(record.tieneSeñalizacion), bool(record.tieneBotiquin), record.conectividad ? 10 : 1]);
+    const empleoInclusivo = Math.min(4, Math.round(((record.mujeres ?? 0) + (record.jovenes ?? 0) + (record.diversidad ?? 0)) / Math.max(employmentPoint(record), 1) * 4));
     const criterios: Record<string, number> = {
       [criteriosPriorizacion[0][0]]: score((record.tipo ? 5 : 1) + (record.quiereRuta ? 3 : 0) + (record.propuestaArticulacion ? 2 : 0)),
       [criteriosPriorizacion[1][0]]: score((record.barrio && record.barrio !== 'Otro' ? 6 : 1) + (record.zona ? 2 : 0) + (record.atractivosCercanos ? 2 : 0)),
@@ -33,7 +35,7 @@ export function priorizar(records: SurveyRecord[]): FilaPriorizacion[] {
       [criteriosPriorizacion[4][0]]: score(infraestructura),
       [criteriosPriorizacion[5][0]]: score((record.segmentosMercado.length ? 4 : 1) + (record.canalesDigitales.length ? 4 : 0) + (record.publicoObjetivo ? 2 : 0)),
       [criteriosPriorizacion[6][0]]: score((record.practicasSostenibilidad.length ? 6 : 1) + (record.certificaciones.length ? 4 : 0)),
-      [criteriosPriorizacion[7][0]]: score((record.scores.Gobernanza ?? 0) + (record.scores['Tejido empresarial'] ?? 0)),
+      [criteriosPriorizacion[7][0]]: score((record.scores.Gobernanza ?? 0) + (record.scores['Tejido empresarial'] ?? 0) + empleoInclusivo),
       [criteriosPriorizacion[8][0]]: score((record.nivelInteresFortalecer || 1) * 2),
       [criteriosPriorizacion[9][0]]: score((record.estado ? 5 : 1) + (record.oportunidades ? 3 : 0) + (record.riesgos ? 2 : 0)),
     };

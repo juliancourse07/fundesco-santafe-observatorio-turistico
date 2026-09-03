@@ -16,3 +16,5 @@ Antes del ranking se debe verificar domicilio o actividad en Santa Fe, al menos 
 | Evidencia, oportunidad y riesgo | 6% | pp. 46, 49–50, 53 |
 
 Rúbrica común: 1–3 = evidencia inexistente o baja; 4–6 = avance parcial; 7–8 = condición sólida; 9–10 = condición verificable y sobresaliente. El total es `Σ(puntaje/10 × peso)` sobre 100. Se ordena de mayor a menor y los primeros 70 se marcan como **Seleccionado: Sí**.
+
+Para el criterio **Articulación e inclusión**, los campos de empleo se evalúan con el punto medio de los rangos categóricos declarados en el formulario. Esto evita puntuar como cero los textos tipo `2 a 3 personas` o `mas de 10 mujeres`; el resultado sigue siendo una estimación y debe validarse con soportes antes de adjudicar beneficios.

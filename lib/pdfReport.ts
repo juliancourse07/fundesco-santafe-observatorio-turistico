@@ -59,6 +59,17 @@ const CONTENT_BOTTOM = TEMPLATE_FOOTER_SAFE_H + spacingScale.sm;
 const IMAGE_BOX_H = 164;
 const TABLE_FONT_SIZE = 8.5;
 const TABLE_LINE_H = 11;
+const empleoPunto = (empleo?: StatsInput['empleo']) => empleo?.totalPersonasVinculadasPunto ?? empleo?.totalPersonasVinculadas ?? ((empleo?.totalFormalesPunto ?? empleo?.totalFormales ?? 0) + (empleo?.totalInformalesPunto ?? empleo?.totalInformales ?? 0));
+const empleoRangoTexto = (empleo?: StatsInput['empleo']) => {
+  if (!empleo) return 'Sin dato';
+  const punto = empleoPunto(empleo);
+  const min = empleo.totalPersonasVinculadasMin ?? punto;
+  const max = empleo.totalPersonasVinculadasMax ?? punto;
+  return min === max ? String(punto) : `${min}–${max}; punto ${punto}`;
+};
+const empleoDetalleTexto = (empleo: StatsInput['empleo'], base: string, validos: keyof NonNullable<StatsInput['empleo']>) => empleo?.[validos]
+  ? `${(empleo as any)[`${base}Min`] ?? (empleo as any)[base]}–${(empleo as any)[`${base}Max`] ?? (empleo as any)[base]}; punto ${(empleo as any)[`${base}Punto`] ?? (empleo as any)[base]}`
+  : 'Sin dato';
 
 const FOREST = toRgb(colorHex.forest);
 const GREEN = toRgb(colorHex.green);
@@ -584,6 +595,7 @@ function renderExpandedMethodologySection(cursor: Cursor, stats: StatsInput, fon
     { criterio: 'Georreferenciación exacta', valor: `${stats.exactos || 0} registros`, pct: `${exactPct}%` },
     { criterio: 'Georreferenciación estimada por centroide', valor: `${stats.estimados || 0} registros`, pct: `${estimatedPct}%` },
     { criterio: 'Completitud declarada', valor: `${stats.tasaCompletitud ?? 0}%`, pct: 'Índice agregado' },
+    { criterio: 'Empleo estimado por rangos', valor: empleoRangoTexto(stats.empleo), pct: `${stats.empleo?.validosPersonasVinculadas ?? 0} registros válidos` },
   ], createColumns([
     { label: 'Criterio', width: 240, value: (row: any) => row.criterio },
     { label: 'Valor', width: 120, value: (row: any) => row.valor, align: 'center' },
@@ -593,6 +605,7 @@ function renderExpandedMethodologySection(cursor: Cursor, stats: StatsInput, fon
   cursor = subTitle(cursor, 'Limitaciones reconocidas', fonts, newPage);
   cursor = drawBulletList(cursor, [
     'La base es autorreportada y algunas variables admiten selección múltiple, por lo que varias métricas expresan intensidad declarada y no exclusividad.',
+    'Las cifras de empleo se estiman desde rangos categóricos: se reporta cota mínima, cota máxima y punto medio; "más de N" se interpreta conservadoramente como N+1 y las celdas multiselección toman el rango más alto.',
     'La georreferenciación estimada mejora cobertura espacial, pero reduce precisión para análisis microterritoriales cuando no existe coordenada puntual.',
     'No todas las dimensiones están desagregadas por tipo de actor, por lo que algunos cruces solo pueden interpretarse a nivel agregado.',
   ], fonts, newPage);
@@ -602,7 +615,7 @@ function renderExpandedMethodologySection(cursor: Cursor, stats: StatsInput, fon
 
 function buildTraceabilityRows(stats: StatsInput) {
   const total = Math.max(stats.total || 0, 1);
-  const empleoTotal = (stats.empleo?.totalFormales ?? 0) + (stats.empleo?.totalInformales ?? 0);
+  const empleoTotal = empleoPunto(stats.empleo);
   return [
     { indicador: 'Registros analizados', formula: 'Conteo total consolidado', variable: 'stats.total', validos: stats.total || 0 },
     { indicador: 'Interés en rutas turísticas', formula: 'stats.rutas / stats.total * 100', variable: 'stats.rutas, stats.total', validos: stats.total || 0 },
@@ -614,7 +627,8 @@ function buildTraceabilityRows(stats: StatsInput) {
     { indicador: 'Facturación electrónica', formula: 'stats.formalizacion.pctFacturacionElectronica', variable: 'stats.formalizacion.pctFacturacionElectronica', validos: stats.formalizacion ? total : 0 },
     { indicador: 'Sede física', formula: 'stats.infraestructura.pctSedeFisica', variable: 'stats.infraestructura.pctSedeFisica', validos: stats.infraestructura ? total : 0 },
     { indicador: 'Conectividad a internet', formula: 'stats.infraestructura.pctConectividad', variable: 'stats.infraestructura.pctConectividad', validos: stats.infraestructura ? total : 0 },
-    { indicador: 'Formalidad del empleo', formula: 'stats.empleo.totalFormales / (formales + informales) * 100', variable: 'stats.empleo.totalFormales, stats.empleo.totalInformales', validos: empleoTotal },
+    { indicador: 'Empleo total estimado', formula: 'Suma de cotas mínimas/máximas y puntos medios de rangos', variable: 'stats.empleo.totalPersonasVinculadas*', validos: stats.empleo?.validosPersonasVinculadas ?? 0 },
+    { indicador: 'Formalidad del empleo', formula: 'stats.empleo.totalFormalesPunto / empleo total puntual * 100', variable: 'stats.empleo.totalFormalesPunto, stats.empleo.totalPersonasVinculadasPunto', validos: empleoTotal },
     { indicador: 'Tasa de completitud', formula: 'stats.tasaCompletitud', variable: 'stats.tasaCompletitud, stats.completitudDist', validos: stats.total || 0 },
   ].filter((row) => row.validos > 0 || row.indicador === 'Registros analizados').slice(0, 10);
 }
@@ -976,9 +990,9 @@ function renderPotMatrizViabilidad(cursor: Cursor, stats: StatsInput, fonts: Fon
   // Calculate scores from available data
   const avanceBarrio = stats.avanceBarrio ?? [];
   const empleo = stats.empleo;
-  const totalEmpleo = empleo ? (empleo.totalFormales + empleo.totalInformales) : 0;
+  const totalEmpleo = empleoPunto(empleo);
   const inclusionScore = totalEmpleo > 0 && empleo
-    ? Math.round(((empleo.totalMujeres + empleo.totalJovenes + empleo.totalDiversidad) / totalEmpleo) * 100)
+    ? Math.round((((empleo.totalMujeresPunto ?? empleo.totalMujeres) + (empleo.totalJovenesPunto ?? empleo.totalJovenes) + (empleo.totalDiversidadPunto ?? empleo.totalDiversidad)) / totalEmpleo) * 100)
     : null;
   const byTipo = stats.byTipo ?? [];
   const culturalScore = byTipo.length > 0 ? Math.min(100, Math.round((byTipo.length / 8) * 100)) : null;
@@ -1000,7 +1014,7 @@ function renderPotMatrizViabilidad(cursor: Cursor, stats: StatsInput, fonts: Fon
       eje: 'Social (inclusión)',
       peso: '12.5%',
       score: inclusionScore !== null ? String(inclusionScore) : 'P',
-      fuente: totalEmpleo > 0 ? `${totalEmpleo} empleos registrados` : 'Sin dato',
+      fuente: totalEmpleo > 0 ? `${empleoRangoTexto(empleo)} personas estimadas` : 'Sin dato',
     },
     {
       eje: 'Social (RNT)',
@@ -1585,16 +1599,18 @@ export async function generatePdfReport(payload: PdfReportPayload): Promise<PdfB
   const empleo = stats.empleo;
   if (empleo) {
     cursor = subTitle(cursor, 'Indicadores agregados de empleo', fonts, newPage);
+    cursor = drawParagraph(cursor, 'Las cifras son estimaciones derivadas de rangos categóricos del formulario. Se presenta rango agregado y punto medio; no deben leerse como conteos exactos.', { size: 8.5, lineHeight: 11.5, font: fonts.regular, color: MUTED, justify: true }, newPage);
     cursor = drawTable(cursor, [
-      { label: 'Empleos formales', value: empleo.validosFormales ? empleo.totalFormales : 'Sin dato' },
-      { label: 'Empleos informales / familiares', value: empleo.validosInformales ? empleo.totalInformales : 'Sin dato' },
-      { label: 'Mujeres vinculadas', value: empleo.validosMujeres ? empleo.totalMujeres : 'Sin dato' },
-      { label: 'Jóvenes vinculados', value: empleo.validosJovenes ? empleo.totalJovenes : 'Sin dato' },
-      { label: 'Adultos mayores (60+)', value: empleo.validosMayores60 ? empleo.totalMayores60 : 'Sin dato' },
-      { label: 'Población diversa', value: empleo.validosDiversidad ? empleo.totalDiversidad : 'Sin dato' },
+      { label: 'Personas vinculadas (total)', value: empleo.validosPersonasVinculadas ? empleoRangoTexto(empleo) : 'Sin dato' },
+      { label: 'Empleos formales', value: empleoDetalleTexto(empleo, 'totalFormales', 'validosFormales') },
+      { label: 'Empleos informales / familiares', value: empleoDetalleTexto(empleo, 'totalInformales', 'validosInformales') },
+      { label: 'Mujeres vinculadas', value: empleoDetalleTexto(empleo, 'totalMujeres', 'validosMujeres') },
+      { label: 'Jóvenes vinculados', value: empleoDetalleTexto(empleo, 'totalJovenes', 'validosJovenes') },
+      { label: 'Adultos mayores (60+)', value: empleoDetalleTexto(empleo, 'totalMayores60', 'validosMayores60') },
+      { label: 'Población diversa', value: empleoDetalleTexto(empleo, 'totalDiversidad', 'validosDiversidad') },
     ], createColumns([
-      { label: 'Indicador', width: 340, value: (row: any) => row.label },
-      { label: 'Total', width: 120, value: (row: any) => String(row.value), align: 'center' },
+      { label: 'Indicador', width: 260, value: (row: any) => row.label },
+      { label: 'Rango estimado', width: 200, value: (row: any) => String(row.value), align: 'center' },
     ]), fonts, newPage);
   }
   cursor = drawInfoBox(cursor, 'Índice sintético de madurez', [analysis.maturity.paragraph, analysis.maturity.formula], fonts, newPage);

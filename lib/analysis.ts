@@ -42,12 +42,34 @@ export type StatsInput = {
     totalMayores60: number;
     totalDiversidad: number;
     totalPersonasVinculadas?: number;
+    totalFormalesMin?: number;
+    totalFormalesMax?: number;
+    totalFormalesPunto?: number;
+    totalInformalesMin?: number;
+    totalInformalesMax?: number;
+    totalInformalesPunto?: number;
+    totalMujeresMin?: number;
+    totalMujeresMax?: number;
+    totalMujeresPunto?: number;
+    totalJovenesMin?: number;
+    totalJovenesMax?: number;
+    totalJovenesPunto?: number;
+    totalMayores60Min?: number;
+    totalMayores60Max?: number;
+    totalMayores60Punto?: number;
+    totalDiversidadMin?: number;
+    totalDiversidadMax?: number;
+    totalDiversidadPunto?: number;
+    totalPersonasVinculadasMin?: number;
+    totalPersonasVinculadasMax?: number;
+    totalPersonasVinculadasPunto?: number;
     validosFormales?: number;
     validosInformales?: number;
     validosMujeres?: number;
     validosJovenes?: number;
     validosMayores60?: number;
     validosDiversidad?: number;
+    validosPersonasVinculadas?: number;
   };
   perfilEmprendedores?: {
     topGenero: Datum[];
@@ -135,6 +157,14 @@ const topLabel = (items?: Datum[], fallback = 'Sin dato') => items?.[0]?.name ||
 const topValue = (items?: Datum[]) => items?.[0]?.value || 0;
 const fmtList = (items?: Datum[], maxItems = 4) => items && items.length ? items.slice(0, maxItems).map((item) => `${item.name} (${item.value})`).join(', ') : 'sin registros suficientes';
 const plural = (value: number, singular: string, pluralWord = singular + 's') => `${value} ${value === 1 ? singular : pluralWord}`;
+const empleoPunto = (empleo?: StatsInput['empleo']) => empleo?.totalPersonasVinculadasPunto ?? empleo?.totalPersonasVinculadas ?? ((empleo?.totalFormalesPunto ?? empleo?.totalFormales ?? 0) + (empleo?.totalInformalesPunto ?? empleo?.totalInformales ?? 0));
+const empleoRangoTexto = (empleo?: StatsInput['empleo']) => {
+  if (!empleo) return 'Sin dato';
+  const punto = empleoPunto(empleo);
+  const min = empleo.totalPersonasVinculadasMin ?? punto;
+  const max = empleo.totalPersonasVinculadasMax ?? punto;
+  return min === max ? `${punto} personas` : `entre ${min} y ${max} personas; estimación puntual ${punto}`;
+};
 
 export function sanitizePdfText(input: string): string {
   return String(input || '')
@@ -170,7 +200,7 @@ function maturityFromStats(stats: StatsInput) {
   const infra = stats.infraestructura;
   const empleo = stats.empleo;
   const total = Math.max(stats.total || 0, 1);
-  const totalEmpleo = empleo?.totalPersonasVinculadas ?? ((empleo?.totalFormales ?? 0) + (empleo?.totalInformales ?? 0));
+  const totalEmpleo = empleoPunto(empleo);
   const formalEmploymentShare = pct(empleo?.totalFormales ?? 0, Math.max(totalEmpleo, 1));
   const employmentIntensity = clamp((totalEmpleo / total) * 20);
   const digitalMentions = (stats.topCanales ?? []).reduce((sum, item) => sum + item.value, 0);
@@ -234,8 +264,8 @@ function maturityFromStats(stats: StatsInput) {
     return { barrio: item.nombre, score: barrioScore, level: maturityLevel(barrioScore) };
   }).sort((a, b) => b.score - a.score);
   const level = maturityLevel(score);
-  const formula = 'Indice 0-100 = 30% formalizacion + 20% infraestructura/conectividad + 15% empleo + 20% presencia digital + 15% sostenibilidad.';
-  const paragraph = `El indice sintetico de madurez del emprendimiento se ubica en ${score}/100, nivel ${level.toLowerCase()}. La formula pondera formalizacion (${components[0].weight}%), infraestructura y conectividad (${components[1].weight}%), empleo (${components[2].weight}%), presencia digital (${components[3].weight}%) y sostenibilidad (${components[4].weight}%). Los componentes mas rezagados son ${components.slice().sort((a, b) => a.score - b.score).slice(0, 2).map((component) => `${component.label.toLowerCase()} (${component.score.toFixed(0)}/100)`).join(' y ')}.`;
+  const formula = 'Indice 0-100 = 30% formalizacion + 20% infraestructura/conectividad + 15% empleo (estimación puntual del rango) + 20% presencia digital + 15% sostenibilidad.';
+  const paragraph = `El indice sintetico de madurez del emprendimiento se ubica en ${score}/100, nivel ${level.toLowerCase()}. La formula pondera formalizacion (${components[0].weight}%), infraestructura y conectividad (${components[1].weight}%), empleo (${components[2].weight}%, usando el punto medio de los rangos declarados), presencia digital (${components[3].weight}%) y sostenibilidad (${components[4].weight}%). Los componentes mas rezagados son ${components.slice().sort((a, b) => a.score - b.score).slice(0, 2).map((component) => `${component.label.toLowerCase()} (${component.score.toFixed(0)}/100)`).join(' y ')}.`;
   return { score, level, formula, components, byBarrio, paragraph };
 }
 
@@ -249,6 +279,7 @@ function methodologyFromStats(stats: StatsInput) {
     `El universo analizado corresponde a ${plural(total, 'emprendimiento')} caracterizados en la localidad de Santa Fe. La fuente primaria es ${source.toLowerCase()} El periodo observado cubre ${stats.fechaInicio || 'sin fecha de inicio disponible'} a ${stats.fechaFin || 'sin fecha de cierre disponible'}.`,
     `La geolocalizacion combina ${stats.exactos || 0} puntos exactos (${exactPct}%) capturados con coordenadas del establecimiento y ${stats.estimados || 0} puntos aproximados (${estimatedPct}%) imputados al centroide del barrio cuando no hubo coordenada valida. Esto mejora la cobertura espacial, pero reduce la precision en analisis de micro-localizacion.`,
     `La tasa de completitud estimada es ${completion}%. El estudio debe leerse como una caracterizacion operativa del ecosistema: los datos son autorreportados, pueden existir respuestas parciales y varias variables admiten seleccion multiple, por lo que algunos indicadores reflejan intensidad declarada mas que adopcion exclusiva.`,
+    'Las cifras de empleo son estimaciones derivadas de rangos categóricos declarados en el formulario: se suman cotas mínimas, cotas máximas y puntos medios. En opciones abiertas como "más de 10" se usa 11 como cota inferior conservadora, y si una celda contiene varias opciones separadas por coma se conserva el rango más alto seleccionado.',
   ];
   const technicalSheet = [
     { label: 'Universo observado', value: `${total} registros` },
@@ -344,8 +375,8 @@ export function buildDeterministicAnalysis(input: StatsInput): DeterministicAnal
   const infra = stats.infraestructura;
   const empleo = stats.empleo;
   const prep = stats.preparacion;
-  const totalEmployment = empleo?.totalPersonasVinculadas ?? ((empleo?.totalFormales ?? 0) + (empleo?.totalInformales ?? 0));
-  const employmentKnown = !!empleo && ((empleo.validosFormales ?? 1) + (empleo.validosInformales ?? 1) > 0);
+  const totalEmployment = empleoPunto(empleo);
+  const employmentKnown = !!empleo && ((empleo.validosPersonasVinculadas ?? 0) > 0 || (empleo.validosFormales ?? 0) + (empleo.validosInformales ?? 0) > 0);
   const formalEmploymentShare = pct(empleo?.totalFormales ?? 0, Math.max(totalEmployment, 1));
   const topBarrio = stats.avanceBarrio?.[0];
   const topTipo = stats.byTipo?.[0];
@@ -356,7 +387,7 @@ export function buildDeterministicAnalysis(input: StatsInput): DeterministicAnal
     topTipo ? `${topTipo.name} es el tipo de emprendimiento con mayor presencia, con ${topTipo.value} registros.` : 'No hay informacion suficiente para tipificar la oferta dominante.',
     formal ? `El ${formal.pctRUT}% cuenta con RUT y el ${formal.pctRNT}% con RNT, lo que deja una brecha de ${Math.max(0, formal.pctRUT - formal.pctRNT)} puntos entre formalizacion tributaria y turistica.` : 'No hay informacion suficiente sobre formalizacion.',
     infra ? `La conectividad alcanza ${infra.pctConectividad}% y la sede fisica ${infra.pctSedeFisica}%, lo que describe una base operativa de nivel ${labelLevel(average([infra.pctConectividad, infra.pctSedeFisica]))}.` : 'No hay informacion suficiente sobre infraestructura.',
-    employmentKnown ? `El ecosistema reporta ${totalEmployment} personas vinculadas; el ${formalEmploymentShare}% corresponde a empleo formal.` : 'Sin dato suficiente para afirmar cuántas personas están vinculadas.',
+    employmentKnown ? `El ecosistema reporta ${empleoRangoTexto(empleo)} vinculadas en total; el ${formalEmploymentShare}% corresponde a empleo formal según la estimación puntual.` : 'Sin dato suficiente para afirmar cuántas personas están vinculadas.',
     strongestScore ? `La dimension mejor valorada es ${strongestScore.name} (${strongestScore.value}/5), mientras que ${weakestScore?.name || 'la dimension mas debil'} requiere seguimiento prioritario.` : 'No hay autoevaluaciones suficientes para comparar dimensiones.',
     concentration.paragraph,
     maturity.paragraph,
@@ -396,8 +427,8 @@ export function buildDeterministicAnalysis(input: StatsInput): DeterministicAnal
       ] as Array<[string, number]>).sort((a, b) => a[1] - b[1])[0][0]}.`,
     ] : ['No hay datos de infraestructura suficientes para construir un analisis.'],
     employment: employmentKnown ? [
-      `Se reportan ${totalEmployment} personas vinculadas, de las cuales ${empleo.totalFormales} son formales y ${empleo.totalInformales} informales o familiares. El peso del empleo formal es ${formalEmploymentShare}%, señal de la necesidad de consolidar estabilidad laboral si el objetivo es escalar oferta turistica.`,
-      `El empleo con enfoque inclusivo registra ${empleo.totalMujeres} mujeres, ${empleo.totalJovenes} jovenes, ${empleo.totalMayores60} personas mayores de 60 años y ${empleo.totalDiversidad} personas de poblacion diversa vinculadas.`,
+      `Se estiman ${empleoRangoTexto(empleo)} vinculadas, con punto medio ${totalEmployment}. El peso del empleo formal estimado es ${formalEmploymentShare}%, señal de la necesidad de consolidar estabilidad laboral si el objetivo es escalar oferta turistica.`,
+      `El empleo con enfoque inclusivo estima ${empleo.totalMujeresPunto ?? empleo.totalMujeres} mujeres, ${empleo.totalJovenesPunto ?? empleo.totalJovenes} jovenes, ${empleo.totalMayores60Punto ?? empleo.totalMayores60} personas mayores de 60 años y ${empleo.totalDiversidadPunto ?? empleo.totalDiversidad} personas de poblacion diversa vinculadas.`,
     ] : ['Sin dato suficiente para una lectura interpretativa de empleo.'],
     market: [
       stats.productoMercado?.topSegmentos?.length ? `Los segmentos con mayor presencia son ${fmtList(stats.productoMercado.topSegmentos, 4)}. Esto indica una vocacion relevante hacia ${topLabel(stats.productoMercado.topSegmentos).toLowerCase()} como mercado prioritario.` : 'No hay datos de segmentos de mercado suficientes.',

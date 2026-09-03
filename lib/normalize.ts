@@ -1,5 +1,6 @@
 import { centroidForBarrio } from './geo';
 export type RawRecord = Record<string, any>;
+export type RangoPersonas = { min: number; max: number; punto: number; esCero: boolean };
 export type SurveyRecord = {
   id: string; fecha: string; encuestador: string; upz: string; barrio: string; zona: string; tipo: string;
   nombre: string; estado: string; lat: number; lng: number;
@@ -15,16 +16,20 @@ export type SurveyRecord = {
   // empleo
   empleadosFormales: number | null; empleadosInformales: number | null; mujeres: number | null; jovenes: number | null;
   mayores60: number | null; diversidad: number | null; totalPersonasVinculadas: number | null;
+  empleadosFormalesRango: RangoPersonas | null; empleadosInformalesRango: RangoPersonas | null; mujeresRango: RangoPersonas | null; jovenesRango: RangoPersonas | null;
+  mayores60Rango: RangoPersonas | null; diversidadRango: RangoPersonas | null; totalPersonasVinculadasRango: RangoPersonas | null;
   // perfil representante
-  generoRepresentante: string; nivelEducativo: string; enfoqueAlta: string; edadRepresentante: number;
+  generoRepresentante: string; nivelEducativo: string; enfoqueAlta: string; edadRepresentante: number | null;
+  anosExperienciaTurismo: number | null;
   // producto turístico y mercado
   segmentosMercado: string[]; publicoObjetivo: string;
-  capacidadDiaria: number; capacidadVisitantes: number;
+  capacidadDiaria: number | null; capacidadVisitantes: number | null;
+  numeroEspaciosAtencion: number | null;
   idiomas: string[];
   // capacitación y sostenibilidad
   capacitacionPrevia: boolean | null; practicasSostenibilidad: string[]; necesidadesCapacitacion: string[];
   // preparación turística
-  nivelInteresFortalecer: number; nivelPreparacionTuristas: number; nivelAporteTurismo: number;
+  nivelInteresFortalecer: number | null; nivelPreparacionTuristas: number | null; nivelAporteTurismo: number | null;
   // oportunidades y riesgos
   oportunidades: string; riesgos: string;
   // canales digitales
@@ -74,13 +79,12 @@ export function toChoices(v: any): string[] {
 }
 const split = toChoices;
 const num = toNumber;
-const numOrZero = (v: any) => num(v) ?? 0;
 const yesNo = (v: any) => toBool(v) === true;
-function field(record: RawRecord, label: string, ...aliases: string[]) {
+export function findFieldName(record: RawRecord, label: string, ...aliases: string[]) {
   const targets = [label, ...aliases].map(key);
   // Preferir coincidencia exacta de clave para evitar falsos positivos.
   const exact = Object.keys(record).find(name => targets.includes(key(name)));
-  if (exact !== undefined) return record[exact];
+  if (exact !== undefined) return exact;
   // Tolerancia a prefijos/sufijos extra en el encabezado (p. ej. "Campo: Número de
   // empleados formales" o marcas de sección). Solo se acepta si es la ÚNICA
   // coincidencia parcial para no mezclar columnas.
@@ -88,8 +92,65 @@ function field(record: RawRecord, label: string, ...aliases: string[]) {
     const k = key(name);
     return targets.some(t => t.length >= 8 && (k.includes(t) || t.includes(k)));
   });
-  return partial.length === 1 ? record[partial[0]] : undefined;
+  return partial.length === 1 ? partial[0] : undefined;
 }
+
+export function field(record: RawRecord, label: string, ...aliases: string[]) {
+  const name = findFieldName(record, label, ...aliases);
+  return name !== undefined ? record[name] : undefined;
+}
+
+const rango = (min: number, max = min): RangoPersonas => ({
+  min,
+  max,
+  punto: (min + max) / 2,
+  esCero: min === 0 && max === 0,
+});
+
+const normalizeRangoText = (value: any) => clean(value)
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .toLowerCase()
+  .replace(/[–—]/g, '-')
+  .replace(/\s+/g, ' ')
+  .trim();
+
+function parseRangoSimple(value: string): RangoPersonas | null {
+  if (!value || /^(n\/?a|na|null|sin dato)$/.test(value)) return null;
+  if (/^(0|ningun[ao]?\b)/.test(value)) return rango(0);
+  if (/^solo el propietario/.test(value)) return rango(1);
+
+  const interval = value.match(/\b(\d+)\s*(?:a|o|-)\s*(\d+)\b/);
+  if (interval) {
+    const min = Number(interval[1]);
+    const max = Number(interval[2]);
+    return Number.isFinite(min) && Number.isFinite(max) ? rango(Math.min(min, max), Math.max(min, max)) : null;
+  }
+
+  const open = value.match(/\bmas\s+de\s+(\d+)\b/);
+  if (open) {
+    const min = Number(open[1]) + 1;
+    return Number.isFinite(min) ? rango(min) : null;
+  }
+
+  const exact = value.match(/\b(\d+)\b/);
+  if (exact) {
+    const n = Number(exact[1]);
+    return Number.isFinite(n) ? rango(n) : null;
+  }
+
+  return null;
+}
+
+export function parseRangoPersonas(valor: any): RangoPersonas | null {
+  const value = normalizeRangoText(valor);
+  if (!value) return null;
+  const opciones = value.split(',').map(part => parseRangoSimple(part.trim())).filter((part): part is RangoPersonas => part !== null);
+  if (!opciones.length) return null;
+  return opciones.sort((a, b) => (b.max - a.max) || (b.min - a.min) || (b.punto - a.punto))[0];
+}
+
+const rangoPunto = (valor: any) => parseRangoPersonas(valor)?.punto ?? null;
 
 export function normaliseRecord(r: RawRecord, idx: number): SurveyRecord {
   r = new Proxy(r, {
@@ -115,7 +176,14 @@ export function normaliseRecord(r: RawRecord, idx: number): SurveyRecord {
     ['Tejido empresarial', 'Tejido empresarial: alianzas con otros emprendimientos, rutas o redes turísticas'],
   ];
   const scores: Record<string, number> = {};
-  scoreCols.forEach(([k, c]) => { const n = num(r[c]); if (n !== undefined) scores[k] = n; });
+  scoreCols.forEach(([k, c]) => { const n = num(r[c]); if (n !== null) scores[k] = n; });
+  const empleadosFormalesRango = parseRangoPersonas(r['Número de empleados formales']);
+  const empleadosInformalesRango = parseRangoPersonas(r['Número de empleados informales o familiares sin contrato']);
+  const mujeresRango = parseRangoPersonas(r['Número de mujeres vinculadas']);
+  const jovenesRango = parseRangoPersonas(r['Número de jóvenes vinculados']);
+  const mayores60Rango = parseRangoPersonas(r['Número de personas mayores de 60 años vinculadas']);
+  const diversidadRango = parseRangoPersonas(r['Número de personas de población diversa o enfoque diferencial vinculadas']);
+  const totalPersonasVinculadasRango = parseRangoPersonas(r['Número total de empleados o personas vinculadas']);
 
   return {
     id: String(idx + 1), fecha: clean(r['Fecha de aplicación'] || r['Marca temporal']),
@@ -142,28 +210,37 @@ export function normaliseRecord(r: RawRecord, idx: number): SurveyRecord {
     tieneBanos: toBool(r['¿Cuenta con baños disponibles para usuarios?']),
     tieneBotiquin: toBool(r['¿Cuenta con botiquín y elementos de emergencia?']),
     conectividad: clean(r['Conectividad a internet']),
-    empleadosFormales: num(r['Número de empleados formales'] ?? field(r, 'Número de empleados formales', 'Empleados formales', 'Empleados formales vinculados', 'Personal formal', 'Número de empleados con contrato formal')),
-    empleadosInformales: num(r['Número de empleados informales o familiares sin contrato'] ?? field(r, 'Número de empleados informales o familiares sin contrato', 'Empleados informales', 'Empleados informales o familiares', 'Personal informal o familiar', 'Número de empleados sin contrato')),
-    mujeres: num(r['Número de mujeres vinculadas'] ?? field(r, 'Número de mujeres vinculadas', 'Mujeres vinculadas', 'Mujeres empleadas', 'Número de mujeres empleadas')),
-    jovenes: num(r['Número de jóvenes vinculados'] ?? field(r, 'Número de jóvenes vinculados', 'Jóvenes vinculados', 'Jóvenes empleados', 'Número de jóvenes empleados')),
-    mayores60: num(r['Número de personas mayores de 60 años vinculadas'] ?? field(r, 'Número de personas mayores de 60 años vinculadas', 'Personas mayores de 60 años', 'Adultos mayores vinculados', 'Número de adultos mayores')),
-    diversidad: num(r['Número de personas de población diversa o enfoque diferencial vinculadas'] ?? field(r, 'Número de personas de población diversa o enfoque diferencial vinculadas', 'Población diversa vinculada', 'Personas de población diversa', 'Número de personas de población diversa')),
-    totalPersonasVinculadas: num(r['Número total de empleados o personas vinculadas'] ?? field(r, 'Número total de empleados o personas vinculadas', 'Total de personas vinculadas', 'Total de empleados', 'Número total de empleados', 'Personas vinculadas')),
+    empleadosFormales: empleadosFormalesRango?.punto ?? null,
+    empleadosInformales: empleadosInformalesRango?.punto ?? null,
+    mujeres: mujeresRango?.punto ?? null,
+    jovenes: jovenesRango?.punto ?? null,
+    mayores60: mayores60Rango?.punto ?? null,
+    diversidad: diversidadRango?.punto ?? null,
+    totalPersonasVinculadas: totalPersonasVinculadasRango?.punto ?? null,
+    empleadosFormalesRango,
+    empleadosInformalesRango,
+    mujeresRango,
+    jovenesRango,
+    mayores60Rango,
+    diversidadRango,
+    totalPersonasVinculadasRango,
     generoRepresentante: clean(r['Género del representante']),
     nivelEducativo: clean(r['Nivel educativo del representante']),
     enfoqueAlta: clean(r['Enfoque diferencial del representante']),
-    edadRepresentante: numOrZero(r['Edad del representante']),
+    edadRepresentante: num(r['Edad del representante']),
+    anosExperienciaTurismo: rangoPunto(r['Años de experiencia en turismo o actividad relacionada']),
     segmentosMercado: split(r['Segmentos de mercado atendidos']),
     publicoObjetivo: clean(r['Público objetivo principal']),
-    capacidadDiaria: numOrZero(r['Capacidad máxima de atención diaria']),
-    capacidadVisitantes: numOrZero(r['Capacidad máxima de visitantes al mismo tiempo']),
+    capacidadDiaria: rangoPunto(r['Capacidad máxima de atención diaria']),
+    capacidadVisitantes: rangoPunto(r['Capacidad máxima de visitantes al mismo tiempo']),
+    numeroEspaciosAtencion: rangoPunto(r['Número de espacios de atención']),
     idiomas: split(r['Idiomas disponibles para atención']),
     capacitacionPrevia: toBool(r['Ha recibido capacitaciones relacionadas con turismo, servicio, sostenibilidad, marketing, finanzas o tecnología']),
     practicasSostenibilidad: split(r['Prácticas de sostenibilidad implementadas']),
     necesidadesCapacitacion: split(r['Necesidades de capacitación del equipo']),
-    nivelInteresFortalecer: numOrZero(r['Nivel de interés en fortalecer el emprendimiento con el proyecto']),
-    nivelPreparacionTuristas: numOrZero(r['Nivel de preparación actual para recibir turistas o visitantes']),
-    nivelAporteTurismo: numOrZero(r['Nivel de aporte del emprendimiento al turismo cultural, patrimonial, comunitario o sostenible']),
+    nivelInteresFortalecer: num(r['Nivel de interés en fortalecer el emprendimiento con el proyecto']),
+    nivelPreparacionTuristas: num(r['Nivel de preparación actual para recibir turistas o visitantes']),
+    nivelAporteTurismo: num(r['Nivel de aporte del emprendimiento al turismo cultural, patrimonial, comunitario o sostenible']),
     oportunidades: clean(r['Oportunidades de crecimiento identificadas']).slice(0, 200),
     riesgos: clean(r['Riesgos o amenazas para el desarrollo turístico']).slice(0, 200),
     canalesDigitales: split(r['Canales digitales activos']),
@@ -182,6 +259,15 @@ export function buildStats(records: SurveyRecord[]) {
   const sumAnswered = (values: Array<number | null>) => {
     const answered = values.filter((value): value is number => value !== null);
     return { value: answered.reduce((sum, value) => sum + value, 0), validos: answered.length };
+  };
+  const sumRangos = (values: Array<RangoPersonas | null>) => {
+    const answered = values.filter((value): value is RangoPersonas => value !== null);
+    return {
+      min: Math.round(answered.reduce((sum, value) => sum + value.min, 0)),
+      max: Math.round(answered.reduce((sum, value) => sum + value.max, 0)),
+      punto: Math.round(answered.reduce((sum, value) => sum + value.punto, 0)),
+      validos: answered.length,
+    };
   };
   const count = (arr: string[]) => arr.reduce((a, v) => { if (v) a[v] = (a[v] || 0) + 1; return a; }, {} as Record<string, number>);
   const top = (obj: Record<string, number>, k = 8) => Object.entries(obj).sort((a, b) => b[1] - a[1]).slice(0, k).map(([name, value]) => ({ name, value }));
@@ -225,10 +311,24 @@ export function buildStats(records: SurveyRecord[]) {
   const mayores60 = sumAnswered(records.map(r => r.mayores60));
   const diversidad = sumAnswered(records.map(r => r.diversidad));
   const totalVinculados = sumAnswered(records.map(r => r.totalPersonasVinculadas));
+  const formalRango = sumRangos(records.map(r => r.empleadosFormalesRango));
+  const informalRango = sumRangos(records.map(r => r.empleadosInformalesRango));
+  const mujeresRango = sumRangos(records.map(r => r.mujeresRango));
+  const jovenesRango = sumRangos(records.map(r => r.jovenesRango));
+  const mayores60Rango = sumRangos(records.map(r => r.mayores60Rango));
+  const diversidadRango = sumRangos(records.map(r => r.diversidadRango));
+  const totalVinculadosRango = sumRangos(records.map(r => r.totalPersonasVinculadasRango));
   const empleo = {
     totalFormales: formal.value, totalInformales: informal.value, totalMujeres: mujeres.value,
     totalJovenes: jovenes.value, totalMayores60: mayores60.value, totalDiversidad: diversidad.value,
     totalPersonasVinculadas: totalVinculados.value,
+    totalFormalesMin: formalRango.min, totalFormalesMax: formalRango.max, totalFormalesPunto: formalRango.punto,
+    totalInformalesMin: informalRango.min, totalInformalesMax: informalRango.max, totalInformalesPunto: informalRango.punto,
+    totalMujeresMin: mujeresRango.min, totalMujeresMax: mujeresRango.max, totalMujeresPunto: mujeresRango.punto,
+    totalJovenesMin: jovenesRango.min, totalJovenesMax: jovenesRango.max, totalJovenesPunto: jovenesRango.punto,
+    totalMayores60Min: mayores60Rango.min, totalMayores60Max: mayores60Rango.max, totalMayores60Punto: mayores60Rango.punto,
+    totalDiversidadMin: diversidadRango.min, totalDiversidadMax: diversidadRango.max, totalDiversidadPunto: diversidadRango.punto,
+    totalPersonasVinculadasMin: totalVinculadosRango.min, totalPersonasVinculadasMax: totalVinculadosRango.max, totalPersonasVinculadasPunto: totalVinculadosRango.punto,
     validosFormales: formal.validos, validosInformales: informal.validos, validosMujeres: mujeres.validos,
     validosJovenes: jovenes.validos, validosMayores60: mayores60.validos, validosDiversidad: diversidad.validos,
     validosPersonasVinculadas: totalVinculados.validos,
@@ -238,7 +338,7 @@ export function buildStats(records: SurveyRecord[]) {
   const generoCount = count(records.map(r => r.generoRepresentante).filter(Boolean));
   const educacionCount = count(records.map(r => r.nivelEducativo).filter(Boolean));
   const enfoqueCount = count(records.map(r => r.enfoqueAlta).filter(Boolean));
-  const edades = records.map(r => r.edadRepresentante).filter(v => v > 0);
+  const edades = records.map(r => r.edadRepresentante).filter((v): v is number => v !== null && v > 0);
   const perfilEmprendedores = {
     topGenero: top(generoCount, 5),
     topEducacion: top(educacionCount, 6),
@@ -250,8 +350,8 @@ export function buildStats(records: SurveyRecord[]) {
   const segmentosCount = count(records.flatMap(r => r.segmentosMercado));
   const idiomasCount = count(records.flatMap(r => r.idiomas));
   const publicoCount = count(records.map(r => r.publicoObjetivo).filter(Boolean));
-  const capacidadTotal = records.reduce((a, r) => a + r.capacidadDiaria, 0);
-  const capacidadVisitantesTotal = records.reduce((a, r) => a + r.capacidadVisitantes, 0);
+  const capacidadTotal = records.reduce((a, r) => a + (r.capacidadDiaria ?? 0), 0);
+  const capacidadVisitantesTotal = records.reduce((a, r) => a + (r.capacidadVisitantes ?? 0), 0);
   const certificacionesCount = count(records.flatMap(r => r.certificaciones));
   const normativaCount = count(records.map(r => r.conocimientoNormatividad).filter(Boolean));
   const productoMercado = {
@@ -276,9 +376,9 @@ export function buildStats(records: SurveyRecord[]) {
 
   // preparación turística
   const preparacion = {
-    promedioInteresFortalecer: avg(records.map(r => r.nivelInteresFortalecer).filter(v => v > 0)),
-    promedioPreparacionTuristas: avg(records.map(r => r.nivelPreparacionTuristas).filter(v => v > 0)),
-    promedioAporteTurismo: avg(records.map(r => r.nivelAporteTurismo).filter(v => v > 0)),
+    promedioInteresFortalecer: avg(records.map(r => r.nivelInteresFortalecer).filter((v): v is number => v !== null && v > 0)),
+    promedioPreparacionTuristas: avg(records.map(r => r.nivelPreparacionTuristas).filter((v): v is number => v !== null && v > 0)),
+    promedioAporteTurismo: avg(records.map(r => r.nivelAporteTurismo).filter((v): v is number => v !== null && v > 0)),
   };
 
   // articulación y atractivos
