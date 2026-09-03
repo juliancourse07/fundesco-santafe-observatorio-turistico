@@ -70,6 +70,9 @@ export default function Dashboard() {
     }
   }
 
+  function downloadPriorization(format: 'csv' | 'pdf', blank = false) {
+    window.location.assign(`/api/priorizacion?format=${format}${blank ? '&blank=true' : ''}`);
+  }
 
   if (loading) return (
     <main className="p-8 min-h-screen flex items-center justify-center" lang="es">
@@ -85,7 +88,7 @@ export default function Dashboard() {
       <div className="max-w-xl mx-auto card p-8 text-center">
         <h1 className="text-2xl font-bold text-fundesco-forest mb-3">Configura la fuente de datos</h1>
         <p className="text-slate-600">{data.error}</p>
-        <p className="mt-4 text-sm text-slate-400">Define <code className="bg-slate-100 px-1 rounded">GOOGLE_SHEETS_CSV_URL</code> o <code className="bg-slate-100 px-1 rounded">GOOGLE_APPS_SCRIPT_URL</code> en las variables de entorno.</p>
+        <p className="mt-4 text-sm text-slate-400">Define <code className="bg-slate-100 px-1 rounded">SHAREPOINT_LIST_URL</code>, <code className="bg-slate-100 px-1 rounded">GOOGLE_SHEETS_CSV_URL</code> o <code className="bg-slate-100 px-1 rounded">GOOGLE_APPS_SCRIPT_URL</code> en las variables de entorno.</p>
       </div>
     </main>
   );
@@ -109,6 +112,13 @@ export default function Dashboard() {
             className="bg-white/15 text-white font-bold px-6 py-3 rounded-2xl hover:bg-white/25 disabled:opacity-60 transition-colors border border-white/30 text-sm">
             {pdfLoading2 ? (pdfStep2 || 'Procesando...') : '⬇ Informe 2 — Potenciales y estrategia'}
           </button>
+          <button onClick={() => downloadPriorization('csv')} className="bg-white/15 text-white font-bold px-6 py-3 rounded-2xl hover:bg-white/25 transition-colors border border-white/30 text-sm">
+            ⬇ Priorización (CSV)
+          </button>
+          <div className="flex gap-2">
+            <button onClick={() => downloadPriorization('pdf')} className="text-xs underline hover:text-fundesco-lime">Metodología y ranking PDF</button>
+            <button onClick={() => downloadPriorization('csv', true)} className="text-xs underline hover:text-fundesco-lime">Formato en blanco</button>
+          </div>
           {(pdfLoading || pdfLoading2) && <div className="w-40 h-1.5 bg-white/20 rounded-full overflow-hidden"><div className="h-full bg-fundesco-lime rounded-full animate-pulse w-3/4" /></div>}
         </div>
       </div>

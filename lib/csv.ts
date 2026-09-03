@@ -1,11 +1,22 @@
 import Papa from "papaparse";
 
 export async function fetchSheetRows() {
+  const sharePointUrl = process.env.SHAREPOINT_LIST_URL?.trim();
   const csvUrl = process.env.GOOGLE_SHEETS_CSV_URL?.trim();
   const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL?.trim();
 
-  if (!csvUrl && !scriptUrl) {
-    throw new Error('Configura GOOGLE_SHEETS_CSV_URL o GOOGLE_APPS_SCRIPT_URL para leer la encuesta.');
+  if (!sharePointUrl && !csvUrl && !scriptUrl) {
+    throw new Error('Configura SHAREPOINT_LIST_URL, GOOGLE_SHEETS_CSV_URL o GOOGLE_APPS_SCRIPT_URL para leer la encuesta.');
+  }
+
+  if (sharePointUrl) {
+    const response = await fetch(sharePointUrl, { cache: 'no-store', headers: { Accept: 'application/json' }, next: { revalidate: 0 } }).catch(() => null);
+    if (!response?.ok) throw new Error(`No fue posible consultar la lista SharePoint (${response?.status ?? 'sin conexión'}).`);
+    const payload = await response.json();
+    if (Array.isArray(payload?.value)) return payload.value;
+    if (Array.isArray(payload?.d?.results)) return payload.d.results;
+    if (Array.isArray(payload)) return payload;
+    throw new Error('La respuesta de SharePoint debe contener value, d.results o un arreglo de filas.');
   }
 
   if (csvUrl) {

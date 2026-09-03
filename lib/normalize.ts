@@ -4,17 +4,17 @@ export type SurveyRecord = {
   id: string; fecha: string; encuestador: string; upz: string; barrio: string; zona: string; tipo: string;
   nombre: string; estado: string; lat: number; lng: number;
   geoPrecision: 'exacto' | 'estimado' | 'sin dato';
-  quiereRuta: boolean; necesidades: string[]; herramientas: string[]; scores: Record<string, number>;
+  quiereRuta: boolean | null; necesidades: string[]; herramientas: string[]; scores: Record<string, number>;
   // formalización
-  tieneRegistroMercantil: boolean; tieneRNT: boolean; tieneRUT: boolean; facturacionElectronica: boolean;
-  tieneAfiliacionSS: boolean; tieneSeguro: boolean;
+  tieneRegistroMercantil: boolean | null; tieneRNT: boolean | null; tieneRUT: boolean | null; facturacionElectronica: boolean | null;
+  tieneAfiliacionSS: boolean | null; tieneSeguro: boolean | null;
   conocimientoNormatividad: string; certificaciones: string[];
   // infraestructura
-  tieneSedeFisica: boolean; tieneSeñalizacion: boolean; tieneBanos: boolean; tieneBotiquin: boolean;
+  tieneSedeFisica: boolean | null; tieneSeñalizacion: boolean | null; tieneBanos: boolean | null; tieneBotiquin: boolean | null;
   conectividad: string;
   // empleo
-  empleadosFormales: number; empleadosInformales: number; mujeres: number; jovenes: number;
-  mayores60: number; diversidad: number;
+  empleadosFormales: number | null; empleadosInformales: number | null; mujeres: number | null; jovenes: number | null;
+  mayores60: number | null; diversidad: number | null; totalPersonasVinculadas: number | null;
   // perfil representante
   generoRepresentante: string; nivelEducativo: string; enfoqueAlta: string; edadRepresentante: number;
   // producto turístico y mercado
@@ -22,7 +22,7 @@ export type SurveyRecord = {
   capacidadDiaria: number; capacidadVisitantes: number;
   idiomas: string[];
   // capacitación y sostenibilidad
-  capacitacionPrevia: boolean; practicasSostenibilidad: string[]; necesidadesCapacitacion: string[];
+  capacitacionPrevia: boolean | null; practicasSostenibilidad: string[]; necesidadesCapacitacion: string[];
   // preparación turística
   nivelInteresFortalecer: number; nivelPreparacionTuristas: number; nivelAporteTurismo: number;
   // oportunidades y riesgos
@@ -33,13 +33,47 @@ export type SurveyRecord = {
   atractivosCercanos: string; propuestaArticulacion: string;
 };
 
-const clean = (v: any) => String(v ?? '').trim();
-const split = (v: any) => clean(v).split(/,|;|\n/).map(s => s.trim()).filter(Boolean);
-const num = (v: any) => { const n = Number(String(v ?? '').replace(',', '.')); return Number.isFinite(n) ? n : undefined; };
-const numOrZero = (v: any) => { const n = num(v); return n !== undefined ? n : 0; };
-const yesNo = (v: any) => /^s[ií]/i.test(clean(v));
+const clean = (v: any) => String(v?.Value ?? v?.Title ?? v ?? '').trim();
+const key = (v: string) => v.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/^OData_/, '').replace(/^field_\d+_?/i, '').replace(/[^a-z0-9]/gi, '').toLowerCase();
+export function toNumber(v: any): number | null {
+  if (v === null || v === undefined || clean(v) === '' || /^(n\/?a|na|null|sin dato)$/i.test(clean(v))) return null;
+  const raw = clean(v).replace(/\s/g, '');
+  const normalized = raw.includes(',') && raw.includes('.')
+    ? raw.replace(/\./g, '').replace(',', '.')
+    : /^[+-]?\d{1,3}(\.\d{3})+$/.test(raw)
+      ? raw.replace(/\./g, '')
+      : raw.replace(',', '.');
+  const value = Number(normalized);
+  return Number.isFinite(value) ? value : null;
+}
+export function toBool(v: any): boolean | null {
+  if (typeof v === 'boolean') return v;
+  const value = clean(v).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  if (/^(si|s|yes|true|1|x)$/.test(value)) return true;
+  if (/^(no|n|false|0)$/.test(value)) return false;
+  return null;
+}
+export function toChoices(v: any): string[] {
+  const values = Array.isArray(v) ? v : Array.isArray(v?.results) ? v.results : [v];
+  return values.flatMap(value => clean(value).split(/,|;|\n/)).map(value => value.trim()).filter(Boolean);
+}
+const split = toChoices;
+const num = toNumber;
+const numOrZero = (v: any) => num(v) ?? 0;
+const yesNo = (v: any) => toBool(v) === true;
+function field(record: RawRecord, label: string, ...aliases: string[]) {
+  const targets = [label, ...aliases].map(key);
+  const found = Object.keys(record).find(name => targets.includes(key(name)));
+  return found === undefined ? undefined : record[found];
+}
 
 export function normaliseRecord(r: RawRecord, idx: number): SurveyRecord {
+  r = new Proxy(r, {
+    get(target, property) {
+      if (typeof property !== 'string' || Object.prototype.hasOwnProperty.call(target, property)) return (target as any)[property];
+      return field(target, property);
+    },
+  });
   const barrio = clean(r['Barrio donde opera el emprendimiento'] || r['Barrio / sector de aplicación'] || 'Otro');
   const upz = clean(r['UPZ donde opera el emprendimiento'] || r['UPZ de aplicación'] || 'Sin clasificar');
   const latRaw = num(r['Latitud decimal capturada manualmente']);
@@ -67,29 +101,30 @@ export function normaliseRecord(r: RawRecord, idx: number): SurveyRecord {
     nombre: clean(r['Nombre comercial'] || r['Nombre del emprendimiento']),
     estado: clean(r['Estado de completitud del registro']),
     lat: lat!, lng: lng!, geoPrecision,
-    quiereRuta: yesNo(r['¿El emprendimiento quiere hacer parte de rutas turísticas de Santa Fe?']),
+    quiereRuta: toBool(r['¿El emprendimiento quiere hacer parte de rutas turísticas de Santa Fe?']),
     necesidades: split(r['Áreas donde requiere mayor apoyo']),
     herramientas: split(r['Herramientas digitales que usa actualmente']),
     scores,
-    tieneRegistroMercantil: yesNo(r['¿Cuenta con registro mercantil / Cámara de Comercio?']),
-    tieneRNT: yesNo(r['¿Cuenta con Registro Nacional de Turismo - RNT?']),
-    tieneRUT: yesNo(r['¿Cuenta con RUT?']),
-    facturacionElectronica: yesNo(r['¿Usa facturación electrónica o documento equivalente?']),
-    tieneAfiliacionSS: yesNo(r['¿Tiene afiliación a seguridad social?']),
-    tieneSeguro: yesNo(r['¿Cuenta con seguro para actividades o responsabilidad civil?']),
+    tieneRegistroMercantil: toBool(r['¿Cuenta con registro mercantil / Cámara de Comercio?']),
+    tieneRNT: toBool(r['¿Cuenta con Registro Nacional de Turismo - RNT?']),
+    tieneRUT: toBool(r['¿Cuenta con RUT?']),
+    facturacionElectronica: toBool(r['¿Usa facturación electrónica o documento equivalente?']),
+    tieneAfiliacionSS: toBool(r['¿Tiene afiliación a seguridad social?']),
+    tieneSeguro: toBool(r['¿Cuenta con seguro para actividades o responsabilidad civil?']),
     conocimientoNormatividad: clean(r['Conocimiento de normatividad turística']),
     certificaciones: split(r['Certificaciones de calidad turística, sostenibilidad, sellos o reconocimientos']),
-    tieneSedeFisica: yesNo(r['¿Cuenta con sede física?']),
-    tieneSeñalizacion: yesNo(r['¿Cuenta con señalización visible?']),
-    tieneBanos: yesNo(r['¿Cuenta con baños disponibles para usuarios?']),
-    tieneBotiquin: yesNo(r['¿Cuenta con botiquín y elementos de emergencia?']),
+    tieneSedeFisica: toBool(r['¿Cuenta con sede física?']),
+    tieneSeñalizacion: toBool(r['¿Cuenta con señalización visible?']),
+    tieneBanos: toBool(r['¿Cuenta con baños disponibles para usuarios?']),
+    tieneBotiquin: toBool(r['¿Cuenta con botiquín y elementos de emergencia?']),
     conectividad: clean(r['Conectividad a internet']),
-    empleadosFormales: numOrZero(r['Número de empleados formales']),
-    empleadosInformales: numOrZero(r['Número de empleados informales o familiares sin contrato']),
-    mujeres: numOrZero(r['Número de mujeres vinculadas']),
-    jovenes: numOrZero(r['Número de jóvenes vinculados']),
-    mayores60: numOrZero(r['Número de personas mayores de 60 años vinculadas']),
-    diversidad: numOrZero(r['Número de personas de población diversa o enfoque diferencial vinculadas']),
+    empleadosFormales: num(r['Número de empleados formales']),
+    empleadosInformales: num(r['Número de empleados informales o familiares sin contrato']),
+    mujeres: num(r['Número de mujeres vinculadas']),
+    jovenes: num(r['Número de jóvenes vinculados']),
+    mayores60: num(r['Número de personas mayores de 60 años vinculadas']),
+    diversidad: num(r['Número de personas de población diversa o enfoque diferencial vinculadas']),
+    totalPersonasVinculadas: num(r['Número total de empleados o personas vinculadas']),
     generoRepresentante: clean(r['Género del representante']),
     nivelEducativo: clean(r['Nivel educativo del representante']),
     enfoqueAlta: clean(r['Enfoque diferencial del representante']),
@@ -99,7 +134,7 @@ export function normaliseRecord(r: RawRecord, idx: number): SurveyRecord {
     capacidadDiaria: numOrZero(r['Capacidad máxima de atención diaria']),
     capacidadVisitantes: numOrZero(r['Capacidad máxima de visitantes al mismo tiempo']),
     idiomas: split(r['Idiomas disponibles para atención']),
-    capacitacionPrevia: yesNo(r['Ha recibido capacitaciones relacionadas con turismo, servicio, sostenibilidad, marketing, finanzas o tecnología']),
+    capacitacionPrevia: toBool(r['Ha recibido capacitaciones relacionadas con turismo, servicio, sostenibilidad, marketing, finanzas o tecnología']),
     practicasSostenibilidad: split(r['Prácticas de sostenibilidad implementadas']),
     necesidadesCapacitacion: split(r['Necesidades de capacitación del equipo']),
     nivelInteresFortalecer: numOrZero(r['Nivel de interés en fortalecer el emprendimiento con el proyecto']),
@@ -116,6 +151,14 @@ export function normaliseRecord(r: RawRecord, idx: number): SurveyRecord {
 export function buildStats(records: SurveyRecord[]) {
   const n = records.length || 1;
   const pct = (count: number) => Math.round((count / n) * 100);
+  const pctAnswered = (values: Array<boolean | null>) => {
+    const answered = values.filter((value): value is boolean => value !== null);
+    return answered.length ? Math.round((answered.filter(Boolean).length / answered.length) * 100) : null;
+  };
+  const sumAnswered = (values: Array<number | null>) => {
+    const answered = values.filter((value): value is number => value !== null);
+    return { value: answered.reduce((sum, value) => sum + value, 0), validos: answered.length };
+  };
   const count = (arr: string[]) => arr.reduce((a, v) => { if (v) a[v] = (a[v] || 0) + 1; return a; }, {} as Record<string, number>);
   const top = (obj: Record<string, number>, k = 8) => Object.entries(obj).sort((a, b) => b[1] - a[1]).slice(0, k).map(([name, value]) => ({ name, value }));
   const avg = (vals: number[]) => vals.length ? Number((vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(2)) : 0;
@@ -133,31 +176,38 @@ export function buildStats(records: SurveyRecord[]) {
 
   // formalización
   const formalizacion = {
-    pctRegistroMercantil: pct(records.filter(r => r.tieneRegistroMercantil).length),
-    pctRNT: pct(records.filter(r => r.tieneRNT).length),
-    pctRUT: pct(records.filter(r => r.tieneRUT).length),
-    pctFacturacionElectronica: pct(records.filter(r => r.facturacionElectronica).length),
-    pctAfiliacionSS: pct(records.filter(r => r.tieneAfiliacionSS).length),
-    pctSeguro: pct(records.filter(r => r.tieneSeguro).length),
+    pctRegistroMercantil: pctAnswered(records.map(r => r.tieneRegistroMercantil)),
+    pctRNT: pctAnswered(records.map(r => r.tieneRNT)),
+    pctRUT: pctAnswered(records.map(r => r.tieneRUT)),
+    pctFacturacionElectronica: pctAnswered(records.map(r => r.facturacionElectronica)),
+    pctAfiliacionSS: pctAnswered(records.map(r => r.tieneAfiliacionSS)),
+    pctSeguro: pctAnswered(records.map(r => r.tieneSeguro)),
   };
 
   // infraestructura
   const infraestructura = {
-    pctSedeFisica: pct(records.filter(r => r.tieneSedeFisica).length),
-    pctSeñalizacion: pct(records.filter(r => r.tieneSeñalizacion).length),
-    pctBanos: pct(records.filter(r => r.tieneBanos).length),
-    pctBotiquin: pct(records.filter(r => r.tieneBotiquin).length),
-    pctConectividad: pct(records.filter(r => r.conectividad && r.conectividad.toLowerCase() !== 'no' && r.conectividad !== '').length),
+    pctSedeFisica: pctAnswered(records.map(r => r.tieneSedeFisica)),
+    pctSeñalizacion: pctAnswered(records.map(r => r.tieneSeñalizacion)),
+    pctBanos: pctAnswered(records.map(r => r.tieneBanos)),
+    pctBotiquin: pctAnswered(records.map(r => r.tieneBotiquin)),
+    pctConectividad: pctAnswered(records.map(r => r.conectividad ? !/^(no|ninguna|sin)$/i.test(r.conectividad) : null)),
   };
 
   // empleo
+  const formal = sumAnswered(records.map(r => r.empleadosFormales));
+  const informal = sumAnswered(records.map(r => r.empleadosInformales));
+  const mujeres = sumAnswered(records.map(r => r.mujeres));
+  const jovenes = sumAnswered(records.map(r => r.jovenes));
+  const mayores60 = sumAnswered(records.map(r => r.mayores60));
+  const diversidad = sumAnswered(records.map(r => r.diversidad));
+  const totalVinculados = sumAnswered(records.map(r => r.totalPersonasVinculadas));
   const empleo = {
-    totalFormales: records.reduce((a, r) => a + r.empleadosFormales, 0),
-    totalInformales: records.reduce((a, r) => a + r.empleadosInformales, 0),
-    totalMujeres: records.reduce((a, r) => a + r.mujeres, 0),
-    totalJovenes: records.reduce((a, r) => a + r.jovenes, 0),
-    totalMayores60: records.reduce((a, r) => a + r.mayores60, 0),
-    totalDiversidad: records.reduce((a, r) => a + r.diversidad, 0),
+    totalFormales: formal.value, totalInformales: informal.value, totalMujeres: mujeres.value,
+    totalJovenes: jovenes.value, totalMayores60: mayores60.value, totalDiversidad: diversidad.value,
+    totalPersonasVinculadas: totalVinculados.value,
+    validosFormales: formal.validos, validosInformales: informal.validos, validosMujeres: mujeres.validos,
+    validosJovenes: jovenes.validos, validosMayores60: mayores60.validos, validosDiversidad: diversidad.validos,
+    validosPersonasVinculadas: totalVinculados.validos,
   };
 
   // perfil de emprendedores
@@ -287,4 +337,3 @@ export function buildStats(records: SurveyRecord[]) {
     fechaFin,
   };
 }
-
