@@ -7,9 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "pdf:sample": "npx --yes tsx scripts/generate-pdf-sample.ts",
-    "verify-assets": "npx --yes tsx scripts/verify-assets.ts",
-    "verify-mapping": "npx --yes tsx scripts/verify-field-mapping.ts"
+    "pdf:sample": "tsx scripts/generate-pdf-sample.ts",
+    "verify-assets": "tsx scripts/verify-assets.ts",
+    "verify-mapping": "tsx scripts/verify-field-mapping.ts"
   },
   "dependencies": {
     "@pdf-lib/fontkit": "^1.1.1",
@@ -33,6 +33,7 @@
     "@types/node": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",
+    "tsx": "^4.23.13",
     "typescript": "latest"
   }
 }
